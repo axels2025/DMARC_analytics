@@ -14,7 +14,172 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      dmarc_auth_results: {
+        Row: {
+          auth_type: string
+          created_at: string
+          domain: string
+          id: string
+          record_id: string
+          result: string
+          selector: string | null
+        }
+        Insert: {
+          auth_type: string
+          created_at?: string
+          domain: string
+          id?: string
+          record_id: string
+          result: string
+          selector?: string | null
+        }
+        Update: {
+          auth_type?: string
+          created_at?: string
+          domain?: string
+          id?: string
+          record_id?: string
+          result?: string
+          selector?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dmarc_auth_results_record_id_fkey"
+            columns: ["record_id"]
+            isOneToOne: false
+            referencedRelation: "dmarc_records"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dmarc_records: {
+        Row: {
+          count: number
+          created_at: string
+          disposition: string
+          dkim_result: string
+          header_from: string
+          id: string
+          report_id: string
+          source_ip: unknown
+          spf_result: string
+        }
+        Insert: {
+          count: number
+          created_at?: string
+          disposition: string
+          dkim_result: string
+          header_from: string
+          id?: string
+          report_id: string
+          source_ip: unknown
+          spf_result: string
+        }
+        Update: {
+          count?: number
+          created_at?: string
+          disposition?: string
+          dkim_result?: string
+          header_from?: string
+          id?: string
+          report_id?: string
+          source_ip?: unknown
+          spf_result?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dmarc_records_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "dmarc_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dmarc_reports: {
+        Row: {
+          created_at: string
+          date_range_begin: number
+          date_range_end: number
+          domain: string
+          id: string
+          org_email: string | null
+          org_name: string
+          policy_dkim: string
+          policy_domain: string
+          policy_p: string
+          policy_pct: number | null
+          policy_sp: string | null
+          policy_spf: string
+          raw_xml: string | null
+          report_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          date_range_begin: number
+          date_range_end: number
+          domain: string
+          id?: string
+          org_email?: string | null
+          org_name: string
+          policy_dkim: string
+          policy_domain: string
+          policy_p: string
+          policy_pct?: number | null
+          policy_sp?: string | null
+          policy_spf: string
+          raw_xml?: string | null
+          report_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          date_range_begin?: number
+          date_range_end?: number
+          domain?: string
+          id?: string
+          org_email?: string | null
+          org_name?: string
+          policy_dkim?: string
+          policy_domain?: string
+          policy_p?: string
+          policy_pct?: number | null
+          policy_sp?: string | null
+          policy_spf?: string
+          raw_xml?: string | null
+          report_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_domains: {
+        Row: {
+          created_at: string
+          domain: string
+          id: string
+          is_primary: boolean | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          domain: string
+          id?: string
+          is_primary?: boolean | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          domain?: string
+          id?: string
+          is_primary?: boolean | null
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
