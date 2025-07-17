@@ -1,5 +1,4 @@
 
-import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,53 +11,36 @@ import {
   TrendingUp, 
   Globe,
   Upload as UploadIcon,
-  Eye
+  Eye,
+  Loader
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import OverviewCharts from "@/components/charts/OverviewCharts";
 import RecentReports from "@/components/RecentReports";
 import MetricCard from "@/components/MetricCard";
+import { useDmarcData } from "@/hooks/useDmarcData";
 
 const Dashboard = () => {
-  // Mock data - in real app this would come from Supabase
-  const mockMetrics = {
-    totalReports: 12,
-    totalEmails: 147832,
-    successRate: 94.2,
-    uniqueIPs: 89,
-    activeDomains: 3,
-    lastUpdated: "2024-01-15 14:30"
-  };
+  const { metrics, recentReports, loading, error } = useDmarcData();
 
-  const mockRecentReports = [
-    {
-      id: "1",
-      domain: "example.com",
-      orgName: "Example Corp",
-      dateRange: "2024-01-14 to 2024-01-15",
-      emailCount: 12430,
-      successRate: 96.8,
-      status: "processed"
-    },
-    {
-      id: "2", 
-      domain: "shop.example.com",
-      orgName: "Google Inc.",
-      dateRange: "2024-01-13 to 2024-01-14", 
-      emailCount: 8921,
-      successRate: 91.2,
-      status: "processed"
-    },
-    {
-      id: "3",
-      domain: "api.example.com", 
-      orgName: "Microsoft Corporation",
-      dateRange: "2024-01-12 to 2024-01-13",
-      emailCount: 5643,
-      successRate: 98.1,
-      status: "processed"
-    }
-  ];
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center">
+          <Loader className="w-8 h-8 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">Loading dashboard data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center text-red-600 p-6">
+        <p>Error loading dashboard: {error}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -79,36 +61,38 @@ const Dashboard = () => {
       </div>
 
       {/* Metrics Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <MetricCard
-          title="Total Reports"
-          value={mockMetrics.totalReports.toLocaleString()}
-          icon={Shield}
-          color="blue"
-          trend="+2 this week"
-        />
-        <MetricCard
-          title="Emails Analyzed"
-          value={mockMetrics.totalEmails.toLocaleString()}
-          icon={Mail}
-          color="green"
-          trend="+12% from last month"
-        />
-        <MetricCard
-          title="Success Rate"
-          value={`${mockMetrics.successRate}%`}
-          icon={CheckCircle}
-          color="emerald"
-          trend="+2.1% improvement"
-        />
-        <MetricCard
-          title="Unique Source IPs"
-          value={mockMetrics.uniqueIPs.toLocaleString()}
-          icon={Globe}
-          color="purple"
-          trend="3 new this week"
-        />
-      </div>
+      {metrics && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <MetricCard
+            title="Total Reports"
+            value={metrics.totalReports.toLocaleString()}
+            icon={Shield}
+            color="blue"
+            trend={metrics.totalReports > 0 ? "Active" : "No reports yet"}
+          />
+          <MetricCard
+            title="Emails Analyzed"
+            value={metrics.totalEmails.toLocaleString()}
+            icon={Mail}
+            color="green"
+            trend={metrics.totalEmails > 0 ? "Real data" : "Upload reports to see data"}
+          />
+          <MetricCard
+            title="Success Rate"
+            value={`${metrics.successRate}%`}
+            icon={CheckCircle}
+            color="emerald"
+            trend={metrics.totalEmails > 0 ? "Authentication rate" : "No data"}
+          />
+          <MetricCard
+            title="Unique Source IPs"
+            value={metrics.uniqueIPs.toLocaleString()}
+            icon={Globe}
+            color="purple"
+            trend={`${metrics.activeDomains} domains`}
+          />
+        </div>
+      )}
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="overview" className="space-y-6">
@@ -131,7 +115,7 @@ const Dashboard = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <RecentReports reports={mockRecentReports} />
+              <RecentReports reports={recentReports} />
             </CardContent>
           </Card>
         </TabsContent>

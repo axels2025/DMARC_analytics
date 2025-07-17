@@ -1,4 +1,5 @@
 
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
   ResponsiveContainer, 
@@ -15,29 +16,130 @@ import {
   Line,
   Legend
 } from "recharts";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { Loader } from "lucide-react";
 
 const OverviewCharts = () => {
-  // Mock data for charts
-  const authStatusData = [
-    { name: "Pass", value: 141203, color: "#10b981" },
-    { name: "Fail", value: 6629, color: "#ef4444" }
-  ];
+  const { user } = useAuth();
+  const [authStatusData, setAuthStatusData] = useState<any[]>([]);
+  const [providerData, setProviderData] = useState<any[]>([]);
+  const [trendData, setTrendData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const providerData = [
-    { provider: "Google", emails: 65432, successRate: 98.2 },
-    { provider: "Microsoft", emails: 42156, successRate: 96.1 },
-    { provider: "Yahoo", emails: 21098, successRate: 94.8 },
-    { provider: "Amazon SES", emails: 19146, successRate: 99.1 }
-  ];
+  useEffect(() => {
+    const fetchChartData = async () => {
+      if (!user) return;
+      
+      setLoading(true);
+      try {
+        // Fetch authentication status data
+        const { data: records } = await supabase
+          .from("dmarc_records")
+          .select(`
+            count,
+            dkim_result,
+            spf_result,
+            source_ip,
+            disposition,
+            dmarc_reports!inner(user_id)
+          `)
+          .eq("dmarc_reports.user_id", user.id);
 
-  const trendData = [
-    { date: "Jan 10", success: 94.2, total: 12430 },
-    { date: "Jan 11", success: 95.1, total: 13205 },
-    { date: "Jan 12", success: 93.8, total: 11987 },
-    { date: "Jan 13", success: 96.3, total: 14521 },
-    { date: "Jan 14", success: 94.9, total: 13876 },
-    { date: "Jan 15", success: 97.1, total: 15234 }
-  ];
+        if (records && records.length > 0) {
+          // Calculate authentication status
+          const passCount = records
+            .filter(r => r.dkim_result === "pass" && r.spf_result === "pass")
+            .reduce((sum, r) => sum + r.count, 0);
+          
+          const failCount = records
+            .filter(r => r.dkim_result !== "pass" || r.spf_result !== "pass")
+            .reduce((sum, r) => sum + r.count, 0);
+
+          setAuthStatusData([
+            { name: "Pass", value: passCount, color: "#10b981" },
+            { name: "Fail", value: failCount, color: "#ef4444" }
+          ]);
+
+          // Group by source IP for provider data (simplified)
+          const ipGroups = records.reduce((acc: any, record) => {
+            const ip = String(record.source_ip);
+            if (!acc[ip]) {
+              acc[ip] = { emails: 0, pass: 0 };
+            }
+            acc[ip].emails += record.count;
+            if (record.dkim_result === "pass" && record.spf_result === "pass") {
+              acc[ip].pass += record.count;
+            }
+            return acc;
+          }, {});
+
+          const topIPs = Object.entries(ipGroups)
+            .map(([ip, data]: [string, any]) => ({
+              provider: ip,
+              emails: data.emails,
+              successRate: data.emails > 0 ? Math.round((data.pass / data.emails) * 100 * 10) / 10 : 0
+            }))
+            .sort((a, b) => b.emails - a.emails)
+            .slice(0, 4);
+
+          setProviderData(topIPs);
+        }
+
+        // Fetch trend data from reports
+        const { data: reports } = await supabase
+          .from("dmarc_reports")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("date_range_begin", { ascending: true })
+          .limit(10);
+
+        if (reports && reports.length > 0) {
+          const trendDataPromises = reports.map(async (report) => {
+            const { data: reportRecords } = await supabase
+              .from("dmarc_records")
+              .select("count, dkim_result, spf_result")
+              .eq("report_id", report.id);
+
+            const total = reportRecords?.reduce((sum, r) => sum + r.count, 0) || 0;
+            const pass = reportRecords?.filter(r => r.dkim_result === "pass" && r.spf_result === "pass")
+              .reduce((sum, r) => sum + r.count, 0) || 0;
+            
+            const successRate = total > 0 ? Math.round((pass / total) * 100 * 10) / 10 : 0;
+            const date = new Date(report.date_range_begin * 1000).toLocaleDateString("en-US", { 
+              month: "short", 
+              day: "numeric" 
+            });
+
+            return { date, success: successRate, total };
+          });
+
+          const resolvedTrendData = await Promise.all(trendDataPromises);
+          setTrendData(resolvedTrendData);
+        }
+      } catch (error) {
+        console.error("Error fetching chart data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChartData();
+  }, [user]);
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {[1, 2, 3].map((i) => (
+          <Card key={i} className={i === 3 ? "lg:col-span-2" : ""}>
+            <CardContent className="flex items-center justify-center h-64">
+              <Loader className="w-8 h-8 animate-spin" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {

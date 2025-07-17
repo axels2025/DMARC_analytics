@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,8 +14,10 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
-  Download
+  Download,
+  Loader
 } from "lucide-react";
+import { useDmarcData } from "@/hooks/useDmarcData";
 import { 
   ResponsiveContainer, 
   PieChart, 
@@ -32,54 +33,131 @@ import {
 
 const ReportDetail = () => {
   const { id } = useParams();
+  const { fetchReportById } = useDmarcData();
+  const [reportData, setReportData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Mock detailed report data
-  const reportData = {
-    id: id,
-    domain: "example.com",
-    orgName: "Google Inc.",
-    orgEmail: "noreply-dmarc-support@google.com",
-    reportId: "15240930515327665966",
-    dateRange: {
-      begin: "2024-01-14 00:00:00",
-      end: "2024-01-15 00:00:00"
-    },
-    policy: {
-      domain: "example.com",
-      dkim: "r", // relaxed
-      spf: "r",  // relaxed
-      p: "quarantine", // policy
-      sp: "quarantine", // subdomain policy
-      pct: 100
-    },
-    summary: {
-      totalEmails: 12430,
-      passedEmails: 12039,
-      failedEmails: 391,
-      successRate: 96.8,
-      uniqueIPs: 23,
-      topFailureReason: "SPF alignment failure"
-    }
-  };
+  useEffect(() => {
+    const loadReport = async () => {
+      if (!id) return;
+      
+      setLoading(true);
+      try {
+        const data = await fetchReportById(id);
+        if (data) {
+          const { report, records, authResults } = data;
+          
+          // Process the data for display
+          const totalEmails = records.reduce((sum: number, r: any) => sum + r.count, 0);
+          const passedEmails = records
+            .filter((r: any) => r.dkim_result === "pass" && r.spf_result === "pass")
+            .reduce((sum: number, r: any) => sum + r.count, 0);
+          
+          const successRate = totalEmails > 0 ? Math.round((passedEmails / totalEmails) * 100 * 10) / 10 : 0;
+          
+          // Group by source IP
+          const ipGroups = records.reduce((acc: any, record: any) => {
+            const ip = String(record.source_ip);
+            if (!acc[ip]) {
+              acc[ip] = { count: 0, pass: 0, fail: 0 };
+            }
+            acc[ip].count += record.count;
+            if (record.dkim_result === "pass" && record.spf_result === "pass") {
+              acc[ip].pass += record.count;
+            } else {
+              acc[ip].fail += record.count;
+            }
+            return acc;
+          }, {});
 
-  const authResultsData = [
-    { name: "DKIM Pass", value: 11890, color: "#10b981" },
-    { name: "SPF Pass", value: 12103, color: "#3b82f6" },
-    { name: "DKIM Fail", value: 540, color: "#ef4444" },
-    { name: "SPF Fail", value: 327, color: "#f59e0b" }
-  ];
+          const sourceIPData = Object.entries(ipGroups).map(([ip, data]: [string, any]) => ({
+            ip,
+            provider: "Unknown Provider", // Could be enhanced with IP-to-provider mapping
+            count: data.count,
+            pass: data.pass,
+            fail: data.fail,
+            rate: data.count > 0 ? Math.round((data.pass / data.count) * 100 * 10) / 10 : 0
+          }));
 
-  const sourceIPData = [
-    { ip: "209.85.220.41", provider: "Google", count: 8432, pass: 8401, fail: 31, rate: 99.6 },
-    { ip: "40.107.231.46", provider: "Microsoft", count: 2156, pass: 2089, fail: 67, rate: 96.9 },
-    { ip: "52.95.48.83", provider: "Amazon SES", count: 1842, pass: 1549, fail: 293, rate: 84.1 }
-  ];
+          // Auth results for charts
+          const dkimPass = records.filter((r: any) => r.dkim_result === "pass").reduce((sum: number, r: any) => sum + r.count, 0);
+          const dkimFail = records.filter((r: any) => r.dkim_result !== "pass").reduce((sum: number, r: any) => sum + r.count, 0);
+          const spfPass = records.filter((r: any) => r.spf_result === "pass").reduce((sum: number, r: any) => sum + r.count, 0);
+          const spfFail = records.filter((r: any) => r.spf_result !== "pass").reduce((sum: number, r: any) => sum + r.count, 0);
 
-  const dispositionData = [
-    { name: "None", value: 12039, color: "#10b981" },
-    { name: "Quarantine", value: 312, color: "#f59e0b" },
-    { name: "Reject", value: 79, color: "#ef4444" }
-  ];
+          const authResultsData = [
+            { name: "DKIM Pass", value: dkimPass, color: "#10b981" },
+            { name: "SPF Pass", value: spfPass, color: "#3b82f6" },
+            { name: "DKIM Fail", value: dkimFail, color: "#ef4444" },
+            { name: "SPF Fail", value: spfFail, color: "#f59e0b" }
+          ];
+
+          // Disposition data
+          const dispositionGroups = records.reduce((acc: any, record: any) => {
+            const disp = record.disposition || "none";
+            if (!acc[disp]) acc[disp] = 0;
+            acc[disp] += record.count;
+            return acc;
+          }, {});
+
+          const dispositionData = Object.entries(dispositionGroups).map(([name, value]: [string, any]) => ({
+            name: name.charAt(0).toUpperCase() + name.slice(1),
+            value,
+            color: name === "none" ? "#10b981" : name === "quarantine" ? "#f59e0b" : "#ef4444"
+          }));
+
+          setReportData({
+            report,
+            summary: {
+              totalEmails,
+              passedEmails,
+              failedEmails: totalEmails - passedEmails,
+              successRate,
+              uniqueIPs: sourceIPData.length,
+              topFailureReason: "Authentication failure"
+            },
+            sourceIPData,
+            authResultsData,
+            dispositionData
+          });
+        } else {
+          setError("Report not found");
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load report");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadReport();
+  }, [id, fetchReportById]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center">
+          <Loader className="w-8 h-8 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">Loading report details...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !reportData) {
+    return (
+      <div className="text-center text-red-600 p-6">
+        <p>Error: {error || "Report not found"}</p>
+        <Link to="/">
+          <Button variant="outline" className="mt-4">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Dashboard
+          </Button>
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -93,9 +171,9 @@ const ReportDetail = () => {
             </Button>
           </Link>
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">{reportData.domain}</h1>
+            <h1 className="text-3xl font-bold text-gray-900">{reportData.report.domain}</h1>
             <p className="text-gray-600 mt-1">
-              DMARC Report from {reportData.orgName}
+              DMARC Report from {reportData.report.org_name}
             </p>
           </div>
         </div>
@@ -184,7 +262,7 @@ const ReportDetail = () => {
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
-                      data={authResultsData}
+                      data={reportData.authResultsData}
                       cx="50%"
                       cy="50%"
                       labelLine={false}
@@ -193,7 +271,7 @@ const ReportDetail = () => {
                       fill="#8884d8"
                       dataKey="value"
                     >
-                      {authResultsData.map((entry, index) => (
+                      {reportData.authResultsData.map((entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -212,7 +290,7 @@ const ReportDetail = () => {
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
-                      data={dispositionData}
+                      data={reportData.dispositionData}
                       cx="50%"
                       cy="50%"
                       labelLine={false}
@@ -221,7 +299,7 @@ const ReportDetail = () => {
                       fill="#8884d8"
                       dataKey="value"
                     >
-                      {dispositionData.map((entry, index) => (
+                      {reportData.dispositionData.map((entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
@@ -244,15 +322,15 @@ const ReportDetail = () => {
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Report ID:</span>
-                      <span className="font-mono text-xs">{reportData.reportId}</span>
+                      <span className="font-mono text-xs">{reportData.report.report_id}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Domain:</span>
-                      <span className="font-medium">{reportData.domain}</span>
+                      <span className="font-medium">{reportData.report.domain}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Organization:</span>
-                      <span>{reportData.orgName}</span>
+                      <span>{reportData.report.org_name}</span>
                     </div>
                   </div>
                 </div>
@@ -262,15 +340,17 @@ const ReportDetail = () => {
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Start:</span>
-                      <span>{reportData.dateRange.begin}</span>
+                      <span>{new Date(reportData.report.date_range_begin * 1000).toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">End:</span>
-                      <span>{reportData.dateRange.end}</span>
+                      <span>{new Date(reportData.report.date_range_end * 1000).toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Duration:</span>
-                      <span>24 hours</span>
+                      <span>
+                        {Math.round((reportData.report.date_range_end - reportData.report.date_range_begin) / 3600)} hours
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -300,7 +380,7 @@ const ReportDetail = () => {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {sourceIPData.map((source, idx) => (
+                {reportData.sourceIPData.map((source: any, idx: number) => (
                   <div key={idx} className="p-4 border border-gray-200 rounded-lg">
                     <div className="flex items-center justify-between mb-3">
                       <div>
@@ -344,15 +424,15 @@ const ReportDetail = () => {
                   <div className="space-y-3">
                     <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <span className="text-gray-600">Domain Policy (p):</span>
-                      <Badge variant="secondary">{reportData.policy.p}</Badge>
+                      <Badge variant="secondary">{reportData.report.policy_p}</Badge>
                     </div>
                     <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <span className="text-gray-600">Subdomain Policy (sp):</span>
-                      <Badge variant="secondary">{reportData.policy.sp}</Badge>
+                      <Badge variant="secondary">{reportData.report.policy_sp || "Same as p"}</Badge>
                     </div>
                     <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <span className="text-gray-600">Percentage (pct):</span>
-                      <Badge variant="default">{reportData.policy.pct}%</Badge>
+                      <Badge variant="default">{reportData.report.policy_pct}%</Badge>
                     </div>
                   </div>
                 </div>
@@ -363,13 +443,13 @@ const ReportDetail = () => {
                     <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <span className="text-gray-600">DKIM Alignment:</span>
                       <Badge variant="outline">
-                        {reportData.policy.dkim === 'r' ? 'Relaxed' : 'Strict'}
+                        {reportData.report.policy_dkim === 'r' ? 'Relaxed' : 'Strict'}
                       </Badge>
                     </div>
                     <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <span className="text-gray-600">SPF Alignment:</span>
                       <Badge variant="outline">
-                        {reportData.policy.spf === 'r' ? 'Relaxed' : 'Strict'}
+                        {reportData.report.policy_spf === 'r' ? 'Relaxed' : 'Strict'}
                       </Badge>
                     </div>
                   </div>
@@ -382,7 +462,7 @@ const ReportDetail = () => {
                   <div>
                     <h4 className="font-medium text-blue-900">Policy Recommendations</h4>
                     <p className="text-sm text-blue-800 mt-1">
-                      Your current policy is set to "quarantine" which is good for monitoring. 
+                      Your current policy is set to "{reportData.report.policy_p}" which is good for monitoring. 
                       Consider moving to "reject" once you achieve consistent 98%+ authentication rates.
                     </p>
                   </div>
@@ -399,34 +479,15 @@ const ReportDetail = () => {
             </CardHeader>
             <CardContent>
               <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                <pre className="text-sm">
-{`<?xml version="1.0" encoding="UTF-8" ?>
-<feedback>
-  <report_metadata>
-    <org_name>${reportData.orgName}</org_name>
-    <email>${reportData.orgEmail}</email>
-    <report_id>${reportData.reportId}</report_id>
-    <date_range>
-      <begin>1642118400</begin>
-      <end>1642204800</end>
-    </date_range>
-  </report_metadata>
-  <policy_published>
-    <domain>${reportData.domain}</domain>
-    <adkim>${reportData.policy.dkim}</adkim>
-    <aspf>${reportData.policy.spf}</aspf>
-    <p>${reportData.policy.p}</p>
-    <sp>${reportData.policy.sp}</sp>
-    <pct>${reportData.policy.pct}</pct>
-  </policy_published>
-  <!-- Individual records would be shown here -->
-</feedback>`}
+                <pre className="text-sm whitespace-pre-wrap">
+                  {reportData.report.raw_xml || "Raw XML data not available"}
                 </pre>
               </div>
-              <p className="text-sm text-gray-600 mt-4">
-                This is a simplified view of the XML structure. The full report contains detailed 
-                records for each source IP and authentication result.
-              </p>
+              {!reportData.report.raw_xml && (
+                <p className="text-sm text-gray-600 mt-4">
+                  Raw XML data was not stored for this report.
+                </p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
