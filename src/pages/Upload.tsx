@@ -14,12 +14,16 @@ import {
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "@/hooks/use-toast";
+import { parseDmarcXml, validateDmarcXml } from '@/utils/dmarcParser';
+import { saveDmarcReport, checkDuplicateReport } from '@/utils/dmarcDatabase';
+import { supabase } from '@/integrations/supabase/client';
 
 interface UploadStatus {
   status: "idle" | "uploading" | "processing" | "success" | "error";
   progress: number;
   message: string;
   fileName?: string;
+  reportId?: string;
 }
 
 const Upload = () => {
@@ -29,65 +33,96 @@ const Upload = () => {
     message: ""
   });
 
-  // Simulate file processing
+  // Process DMARC file
   const processFile = async (file: File) => {
-    setUploadStatus({
-      status: "uploading",
-      progress: 10,
-      message: "Uploading file...",
-      fileName: file.name
-    });
+    try {
+      setUploadStatus({
+        status: "uploading",
+        progress: 10,
+        message: "Reading file...",
+        fileName: file.name
+      });
 
-    // Simulate upload progress
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setUploadStatus(prev => ({
-      ...prev,
-      status: "processing",
-      progress: 40,
-      message: "Validating XML structure..."
-    }));
+      // Read file content
+      const fileContent = await file.text();
+      
+      setUploadStatus(prev => ({
+        ...prev,
+        progress: 30,
+        message: "Validating XML format..."
+      }));
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    setUploadStatus(prev => ({
-      ...prev,
-      progress: 70,
-      message: "Parsing DMARC data..."
-    }));
+      // Validate XML
+      const validation = validateDmarcXml(fileContent);
+      if (!validation.isValid) {
+        throw new Error(validation.error || 'Invalid XML format');
+      }
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setUploadStatus(prev => ({
-      ...prev,
-      progress: 90,
-      message: "Storing report data..."
-    }));
+      setUploadStatus(prev => ({
+        ...prev,
+        progress: 50,
+        message: "Parsing DMARC report..."
+      }));
 
-    await new Promise(resolve => setTimeout(resolve, 800));
+      // Parse DMARC report
+      const report = await parseDmarcXml(fileContent);
 
-    // Check if it's a valid XML file (basic check)
-    if (!file.name.toLowerCase().endsWith('.xml')) {
+      setUploadStatus(prev => ({
+        ...prev,
+        progress: 70,
+        message: "Checking for duplicates..."
+      }));
+
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error('User not authenticated. Please sign in to upload reports.');
+      }
+
+      // Check for duplicate
+      const isDuplicate = await checkDuplicateReport(report.reportMetadata.reportId, user.id);
+      if (isDuplicate) {
+        throw new Error('This report has already been uploaded');
+      }
+
+      setUploadStatus(prev => ({
+        ...prev,
+        progress: 90,
+        message: "Saving to database..."
+      }));
+
+      // Save to database
+      const reportId = await saveDmarcReport(report, fileContent, user.id);
+
+      setUploadStatus({
+        status: "success",
+        progress: 100,
+        message: "DMARC report processed successfully!",
+        fileName: file.name,
+        reportId
+      });
+
+      toast({
+        title: "Upload Successful",
+        description: `DMARC report for ${report.policyPublished.domain} has been processed.`,
+      });
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      
       setUploadStatus({
         status: "error",
         progress: 0,
-        message: "Invalid file format. Please upload a valid DMARC XML report.",
+        message: errorMessage,
         fileName: file.name
       });
-      return;
+
+      toast({
+        title: "Upload Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
-
-    setUploadStatus({
-      status: "success",
-      progress: 100,
-      message: "DMARC report processed successfully!",
-      fileName: file.name
-    });
-
-    toast({
-      title: "Upload Successful",
-      description: `${file.name} has been processed and added to your dashboard.`,
-    });
   };
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -218,9 +253,19 @@ const Upload = () => {
                   </div>
                 </div>
                 {uploadStatus.status === "success" && (
-                  <Button onClick={resetUpload} variant="outline" size="sm">
-                    Upload Another
-                  </Button>
+                  <div className="flex space-x-2">
+                    {uploadStatus.reportId && (
+                      <Button 
+                        onClick={() => window.location.href = `/report/${uploadStatus.reportId}`}
+                        size="sm"
+                      >
+                        View Report
+                      </Button>
+                    )}
+                    <Button onClick={resetUpload} variant="outline" size="sm">
+                      Upload Another
+                    </Button>
+                  </div>
                 )}
               </div>
 
@@ -242,6 +287,15 @@ const Upload = () => {
                   <AlertDescription>
                     Your DMARC report has been successfully processed and is now available in your dashboard. 
                     The data includes authentication results, source IPs, and policy information.
+                    {uploadStatus.reportId && (
+                      <Button 
+                        variant="link" 
+                        className="p-0 ml-2 h-auto"
+                        onClick={() => window.location.href = `/report/${uploadStatus.reportId}`}
+                      >
+                        View Report →
+                      </Button>
+                    )}
                   </AlertDescription>
                 </Alert>
               )}
@@ -251,7 +305,10 @@ const Upload = () => {
                 <Alert variant="destructive">
                   <XCircle className="h-4 w-4" />
                   <AlertDescription>
-                    {uploadStatus.message} Please ensure you're uploading a valid DMARC XML report.
+                    {uploadStatus.message}
+                    <Button onClick={resetUpload} variant="outline" size="sm" className="ml-4">
+                      Try Again
+                    </Button>
                   </AlertDescription>
                 </Alert>
               )}
