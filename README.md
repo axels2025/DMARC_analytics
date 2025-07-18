@@ -29,6 +29,12 @@ DMARC Dashboard is a modern web application that helps organizations monitor and
 - **Gain Visibility** - Understand who's sending emails on behalf of your domain
 - **Meet Compliance** - Satisfy security requirements with detailed DMARC monitoring
 
+<img width="903" height="797" alt="Screenshot 2025-07-19 at 00 27 42" src="https://github.com/user-attachments/assets/01a8479e-2a80-4747-8f9b-c0ecb667fdab" />
+<img width="906" height="809" alt="Screenshot 2025-07-19 at 00 27 59" src="https://github.com/user-attachments/assets/13739a25-001a-4591-894b-79d87ffa39b6" />
+<img width="908" height="888" alt="Screenshot 2025-07-19 at 00 28 11" src="https://github.com/user-attachments/assets/c82afcbc-301d-4dda-a865-e4b974a2378a" />
+
+
+
 ---
 
 ## 🚀 Getting Started
