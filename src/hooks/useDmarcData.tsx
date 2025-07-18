@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
 
@@ -192,7 +192,7 @@ export const useDmarcData = () => {
     }
   };
 
-  const fetchReportById = async (reportId: string) => {
+  const fetchReportById = useCallback(async (reportId: string) => {
     if (!user) return null;
 
     try {
@@ -229,7 +229,7 @@ export const useDmarcData = () => {
     }
 
     return null;
-  };
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -246,19 +246,21 @@ export const useDmarcData = () => {
     }
   }, [user]);
 
+  const refetch = useCallback(() => {
+    if (user) {
+      fetchReports();
+      fetchMetrics();
+      fetchRecentReports();
+    }
+  }, [user]);
+
   return {
     reports,
     metrics,
     recentReports,
     loading,
     error,
-    refetch: () => {
-      if (user) {
-        fetchReports();
-        fetchMetrics();
-        fetchRecentReports();
-      }
-    },
+    refetch,
     fetchReportById
   };
 };

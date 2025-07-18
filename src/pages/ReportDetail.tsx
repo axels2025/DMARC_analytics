@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
   ArrowLeft, 
   Calendar, 
@@ -15,7 +16,8 @@ import {
   XCircle,
   AlertTriangle,
   Download,
-  Loader
+  Loader,
+  HelpCircle
 } from "lucide-react";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { 
@@ -80,17 +82,26 @@ const ReportDetail = () => {
             rate: data.count > 0 ? Math.round((data.pass / data.count) * 100 * 10) / 10 : 0
           }));
 
-          // Auth results for charts
+          // Auth results for bar chart - separate SPF and DKIM results
           const dkimPass = records.filter((r: any) => r.dkim_result === "pass").reduce((sum: number, r: any) => sum + r.count, 0);
           const dkimFail = records.filter((r: any) => r.dkim_result !== "pass").reduce((sum: number, r: any) => sum + r.count, 0);
           const spfPass = records.filter((r: any) => r.spf_result === "pass").reduce((sum: number, r: any) => sum + r.count, 0);
           const spfFail = records.filter((r: any) => r.spf_result !== "pass").reduce((sum: number, r: any) => sum + r.count, 0);
 
+          // Data for bar chart showing pass/fail for each authentication method
           const authResultsData = [
-            { name: "DKIM Pass", value: dkimPass, color: "#10b981" },
-            { name: "SPF Pass", value: spfPass, color: "#3b82f6" },
-            { name: "DKIM Fail", value: dkimFail, color: "#ef4444" },
-            { name: "SPF Fail", value: spfFail, color: "#f59e0b" }
+            {
+              name: "DKIM",
+              pass: dkimPass,
+              fail: dkimFail,
+              passRate: totalEmails > 0 ? Math.round((dkimPass / totalEmails) * 100 * 10) / 10 : 0
+            },
+            {
+              name: "SPF",
+              pass: spfPass,
+              fail: spfFail,
+              passRate: totalEmails > 0 ? Math.round((spfPass / totalEmails) * 100 * 10) / 10 : 0
+            }
           ];
 
           // Disposition data
@@ -101,11 +112,16 @@ const ReportDetail = () => {
             return acc;
           }, {});
 
-          const dispositionData = Object.entries(dispositionGroups).map(([name, value]: [string, any]) => ({
-            name: name.charAt(0).toUpperCase() + name.slice(1),
-            value,
-            color: name === "none" ? "#10b981" : name === "quarantine" ? "#f59e0b" : "#ef4444"
-          }));
+          const dispositionData = Object.entries(dispositionGroups)
+            .map(([name, value]: [string, any]) => ({
+              name: name === "none" ? "Policy: p=none" : 
+                    name === "quarantine" ? "Policy: p=quarantine" : 
+                    name === "reject" ? "Policy: p=reject" : 
+                    name.charAt(0).toUpperCase() + name.slice(1),
+              value,
+              color: name === "none" ? "#10b981" : name === "quarantine" ? "#f59e0b" : "#ef4444"
+            }))
+            .filter(item => item.value > 0);
 
           setReportData({
             report,
@@ -260,31 +276,77 @@ const ReportDetail = () => {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={reportData.authResultsData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {reportData.authResultsData.map((entry: any, index: number) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value) => [value.toLocaleString(), "Emails"]} />
-                  </PieChart>
+                  <BarChart
+                    data={reportData.authResultsData}
+                    margin={{
+                      top: 20,
+                      right: 30,
+                      left: 20,
+                      bottom: 5,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip 
+                      formatter={(value, name) => [
+                        value.toLocaleString(), 
+                        name === 'pass' ? 'Pass' : 'Fail'
+                      ]}
+                    />
+                    <Bar dataKey="pass" fill="#10b981" name="pass" />
+                    <Bar dataKey="fail" fill="#ef4444" name="fail" />
+                  </BarChart>
                 </ResponsiveContainer>
+                {/* Summary statistics */}
+                <div className="mt-4 grid grid-cols-2 gap-4">
+                  {reportData.authResultsData.map((entry: any, index: number) => (
+                    <div key={index} className="text-center p-3 bg-gray-50 rounded-lg">
+                      <h4 className="font-medium text-gray-900">{entry.name}</h4>
+                      <p className="text-lg font-bold text-green-600">{entry.passRate}%</p>
+                      <p className="text-xs text-gray-600">
+                        {entry.pass.toLocaleString()} pass, {entry.fail.toLocaleString()} fail
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
             {/* Disposition Actions */}
             <Card>
               <CardHeader>
-                <CardTitle>Email Disposition</CardTitle>
+                <CardTitle className="flex items-center justify-between">
+                  <span>Email Disposition</span>
+                  <TooltipProvider>
+                    <UITooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                          <HelpCircle className="h-4 w-4 text-gray-500" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="left" className="max-w-md">
+                        <div className="space-y-3">
+                          <div className="font-semibold">DMARC Disposition Actions</div>
+                          <div className="space-y-2 text-sm">
+                            <div>
+                              <strong>Policy: p=none</strong> - Email delivered normally to inbox. No action taken even if authentication failed. Used for monitoring.
+                            </div>
+                            <div>
+                              <strong>Policy: p=quarantine</strong> - Email sent to spam/junk folder. Server treated it as suspicious due to failed authentication.
+                            </div>
+                            <div>
+                              <strong>Policy: p=reject</strong> - Email completely blocked/bounced. Never reached recipient's mailbox due to failed authentication.
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600 pt-2 border-t">
+                            This shows how receiving servers handled your emails based on DMARC policy and authentication results.
+                          </div>
+                        </div>
+                      </TooltipContent>
+                    </UITooltip>
+                  </TooltipProvider>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={300}>
@@ -293,9 +355,12 @@ const ReportDetail = () => {
                       data={reportData.dispositionData}
                       cx="50%"
                       cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
-                      outerRadius={80}
+                      labelLine={true}
+                      label={({ name, percent }) => {
+                        // Only show label if slice is large enough (>5%)
+                        return percent > 0.05 ? `${name} ${(percent * 100).toFixed(1)}%` : '';
+                      }}
+                      outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"
                     >
@@ -306,6 +371,20 @@ const ReportDetail = () => {
                     <Tooltip formatter={(value) => [value.toLocaleString(), "Emails"]} />
                   </PieChart>
                 </ResponsiveContainer>
+                {/* Legend for better readability */}
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {reportData.dispositionData.map((entry: any, index: number) => (
+                    <div key={index} className="flex items-center space-x-2">
+                      <div 
+                        className="w-3 h-3 rounded-full" 
+                        style={{ backgroundColor: entry.color }}
+                      ></div>
+                      <span className="text-sm text-gray-600">
+                        {entry.name}: {entry.value.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </div>
