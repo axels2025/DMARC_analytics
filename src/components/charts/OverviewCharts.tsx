@@ -19,6 +19,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Loader } from "lucide-react";
+import { detectIPProviders } from "@/utils/ipProviderDetection";
 
 const OverviewCharts = () => {
   const { user } = useAuth();
@@ -61,29 +62,34 @@ const OverviewCharts = () => {
             { name: "Fail", value: failCount, color: "#ef4444" }
           ]);
 
-          // Group by source IP for provider data (simplified)
-          const ipGroups = records.reduce((acc: any, record) => {
+          // Group by provider instead of IP
+          const uniqueIPs = [...new Set(records.map(r => String(r.source_ip)))];
+          const providerMap = await detectIPProviders(uniqueIPs);
+
+          const providerGroups = records.reduce((acc: any, record) => {
             const ip = String(record.source_ip);
-            if (!acc[ip]) {
-              acc[ip] = { emails: 0, pass: 0 };
+            const provider = providerMap.get(ip) || "Unknown Provider";
+            
+            if (!acc[provider]) {
+              acc[provider] = { emails: 0, pass: 0 };
             }
-            acc[ip].emails += record.count;
+            acc[provider].emails += record.count;
             if (record.dkim_result === "pass" && record.spf_result === "pass") {
-              acc[ip].pass += record.count;
+              acc[provider].pass += record.count;
             }
             return acc;
           }, {});
 
-          const topIPs = Object.entries(ipGroups)
-            .map(([ip, data]: [string, any]) => ({
-              provider: ip,
+          const topProviders = Object.entries(providerGroups)
+            .map(([provider, data]: [string, any]) => ({
+              provider,
               emails: data.emails,
               successRate: data.emails > 0 ? Math.round((data.pass / data.emails) * 100 * 10) / 10 : 0
             }))
             .sort((a, b) => b.emails - a.emails)
-            .slice(0, 4);
+            .slice(0, 6); // Show top 6 providers instead of 4
 
-          setProviderData(topIPs);
+          setProviderData(topProviders);
         }
 
         // Fetch trend data from reports
@@ -196,7 +202,13 @@ const OverviewCharts = () => {
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={providerData}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="provider" />
+              <XAxis 
+                dataKey="provider" 
+                angle={-45}
+                textAnchor="end"
+                height={80}
+                interval={0}
+              />
               <YAxis />
               <Tooltip 
                 formatter={(value, name) => [

@@ -20,6 +20,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { useDmarcData } from "@/hooks/useDmarcData";
+import { detectIPProviders } from "@/utils/ipProviderDetection";
 import { 
   ResponsiveContainer, 
   PieChart, 
@@ -73,9 +74,13 @@ const ReportDetail = () => {
             return acc;
           }, {});
 
+          // Get unique IPs for provider detection
+          const uniqueIPs = Object.keys(ipGroups);
+          const providerMap = await detectIPProviders(uniqueIPs);
+
           const sourceIPData = Object.entries(ipGroups).map(([ip, data]: [string, any]) => ({
             ip,
-            provider: "Unknown Provider", // Could be enhanced with IP-to-provider mapping
+            provider: providerMap.get(ip) || "Unknown Provider",
             count: data.count,
             pass: data.pass,
             fail: data.fail,
@@ -123,6 +128,41 @@ const ReportDetail = () => {
             }))
             .filter(item => item.value > 0);
 
+          // Calculate actual top failure reason
+          const calculateTopFailureReason = () => {
+            if (totalEmails - passedEmails === 0) {
+              return "No issues detected";
+            }
+
+            const failureTypes = {
+              "DKIM authentication failure": 0,
+              "SPF authentication failure": 0,
+              "Both DKIM and SPF failure": 0
+            };
+
+            records.forEach((record: any) => {
+              if (record.dkim_result !== "pass" || record.spf_result !== "pass") {
+                const dkimFailed = record.dkim_result !== "pass";
+                const spfFailed = record.spf_result !== "pass";
+                
+                if (dkimFailed && spfFailed) {
+                  failureTypes["Both DKIM and SPF failure"] += record.count;
+                } else if (dkimFailed) {
+                  failureTypes["DKIM authentication failure"] += record.count;
+                } else if (spfFailed) {
+                  failureTypes["SPF authentication failure"] += record.count;
+                }
+              }
+            });
+
+            // Find the most common failure type
+            const topFailure = Object.entries(failureTypes)
+              .filter(([_, count]) => count > 0)
+              .sort(([_, a], [__, b]) => b - a)[0];
+
+            return topFailure ? topFailure[0] : "Authentication failure";
+          };
+
           setReportData({
             report,
             summary: {
@@ -131,7 +171,7 @@ const ReportDetail = () => {
               failedEmails: totalEmails - passedEmails,
               successRate,
               uniqueIPs: sourceIPData.length,
-              topFailureReason: "Authentication failure"
+              topFailureReason: calculateTopFailureReason()
             },
             sourceIPData,
             authResultsData,
@@ -443,7 +483,9 @@ const ReportDetail = () => {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Top Issue:</span>
-                      <span className="text-red-600 text-xs">{reportData.summary.topFailureReason}</span>
+                      <span className={`text-xs ${reportData.summary.topFailureReason === "No issues detected" ? "text-green-600" : "text-red-600"}`}>
+                        {reportData.summary.topFailureReason}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -1,4 +1,5 @@
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,16 +13,64 @@ import {
   Globe,
   Upload as UploadIcon,
   Eye,
-  Loader
+  Loader,
+  Download
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import OverviewCharts from "@/components/charts/OverviewCharts";
+import TrendAnalytics from "@/components/charts/TrendAnalytics";
 import RecentReports from "@/components/RecentReports";
 import MetricCard from "@/components/MetricCard";
 import { useDmarcData } from "@/hooks/useDmarcData";
+import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
+import { useAuth } from "@/hooks/useAuth";
+import InsightsModal from "@/components/InsightsModal";
+import ExportModal from "@/components/ExportModal";
 
 const Dashboard = () => {
   const { metrics, recentReports, loading, error } = useDmarcData();
+  const { user } = useAuth();
+  const [showInsightsModal, setShowInsightsModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  // Handle export summary click
+  const handleExportSummary = () => {
+    if (!metrics || !recentReports || recentReports.length === 0) {
+      alert('No data available to export. Please upload some DMARC reports first.');
+      return;
+    }
+    
+    setShowExportModal(true);
+  };
+
+  // Handle export with format selection
+  const handleExport = async (format: 'csv' | 'pdf') => {
+    if (!user) {
+      alert('Authentication required for export.');
+      return;
+    }
+
+    try {
+      if (format === 'csv') {
+        await exportAsCSV(user.id);
+      } else {
+        await exportAsPDF(user.id);
+      }
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert('Export failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
+  };
+
+  // Handle view insights click
+  const handleViewInsights = () => {
+    if (!metrics) {
+      alert('No data available for insights. Please upload some DMARC reports first.');
+      return;
+    }
+    
+    setShowInsightsModal(true);
+  };
 
   if (loading) {
     return (
@@ -121,50 +170,7 @@ const Dashboard = () => {
         </TabsContent>
 
         <TabsContent value="analytics" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Authentication Trends</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64 flex items-center justify-center text-gray-500">
-                  <div className="text-center">
-                    <TrendingUp className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                    <p>Trend analysis charts would appear here</p>
-                    <p className="text-sm mt-2">Upload more reports to see trends</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Top Source IPs</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {[
-                    { ip: "209.85.220.41", provider: "Google", count: 15420, rate: 98.2 },
-                    { ip: "40.107.231.46", provider: "Microsoft", count: 8932, rate: 96.1 },
-                    { ip: "52.95.48.83", provider: "Amazon SES", count: 6211, rate: 99.1 },
-                  ].map((item, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                      <div>
-                        <div className="font-medium">{item.ip}</div>
-                        <div className="text-sm text-gray-600">{item.provider}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-medium">{item.count.toLocaleString()}</div>
-                        <Badge variant={item.rate > 95 ? "default" : "secondary"}>
-                          {item.rate}%
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <TrendAnalytics />
         </TabsContent>
       </Tabs>
 
@@ -183,13 +189,19 @@ const Dashboard = () => {
               </div>
             </Link>
             
-            <div className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-colors cursor-pointer">
-              <CheckCircle className="w-8 h-8 text-gray-400 mb-2" />
+            <div 
+              onClick={handleExportSummary}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-colors cursor-pointer"
+            >
+              <Download className="w-8 h-8 text-gray-400 mb-2" />
               <h3 className="font-medium text-gray-900">Export Summary</h3>
               <p className="text-sm text-gray-600">Download comprehensive analytics report</p>
             </div>
             
-            <div className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-colors cursor-pointer">
+            <div 
+              onClick={handleViewInsights}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-colors cursor-pointer"
+            >
               <Eye className="w-8 h-8 text-gray-400 mb-2" />
               <h3 className="font-medium text-gray-900">View Insights</h3>
               <p className="text-sm text-gray-600">Get recommendations for improvement</p>
@@ -197,6 +209,22 @@ const Dashboard = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Insights Modal */}
+      {metrics && (
+        <InsightsModal
+          isOpen={showInsightsModal}
+          onClose={() => setShowInsightsModal(false)}
+          metrics={metrics}
+        />
+      )}
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        onExport={handleExport}
+      />
     </div>
   );
 };
