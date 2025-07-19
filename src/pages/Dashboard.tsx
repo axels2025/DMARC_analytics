@@ -28,7 +28,7 @@ import InsightsModal from "@/components/InsightsModal";
 import ExportModal from "@/components/ExportModal";
 
 const Dashboard = () => {
-  const { metrics, recentReports, loading, error } = useDmarcData();
+  const { metrics, recentReports, loading, error, refetch } = useDmarcData();
   const { user } = useAuth();
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -164,7 +164,7 @@ const Dashboard = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <RecentReports reports={recentReports} />
+              <RecentReports reports={recentReports} onRefresh={refetch} />
             </CardContent>
           </Card>
         </TabsContent>

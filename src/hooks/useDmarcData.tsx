@@ -20,6 +20,7 @@ export interface DmarcReport {
   created_at: string;
   updated_at: string;
   user_id: string;
+  include_in_dashboard: boolean | null;
 }
 
 export interface DmarcRecord {
@@ -61,6 +62,7 @@ export interface RecentReport {
   emailCount: number;
   successRate: number;
   status: string;
+  includeInDashboard: boolean;
 }
 
 export const useDmarcData = () => {
@@ -92,13 +94,14 @@ export const useDmarcData = () => {
     if (!user) return;
 
     try {
-      // Get total reports
+      // Get total reports (only those included in dashboard)
       const { count: totalReports } = await supabase
         .from("dmarc_reports")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
 
-      // Get records with counts
+      // Get records with counts (only from reports included in dashboard)
       const { data: records } = await supabase
         .from("dmarc_records")
         .select(`
@@ -106,9 +109,10 @@ export const useDmarcData = () => {
           dkim_result,
           spf_result,
           source_ip,
-          dmarc_reports!inner(user_id)
+          dmarc_reports!inner(user_id, include_in_dashboard)
         `)
-        .eq("dmarc_reports.user_id", user.id);
+        .eq("dmarc_reports.user_id", user.id)
+        .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
 
       if (records) {
         const totalEmails = records.reduce((sum, record) => sum + record.count, 0);
@@ -121,11 +125,12 @@ export const useDmarcData = () => {
         
         const successRate = totalEmails > 0 ? (successfulEmails / totalEmails) * 100 : 0;
 
-        // Get unique domains
+        // Get unique domains (only from reports included in dashboard)
         const { data: domains } = await supabase
           .from("dmarc_reports")
           .select("domain")
-          .eq("user_id", user.id);
+          .eq("user_id", user.id)
+          .or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
         
         const activeDomains = new Set(domains?.map(d => d.domain)).size;
 
@@ -181,7 +186,8 @@ export const useDmarcData = () => {
             dateRange: `${startDate} to ${endDate}`,
             emailCount,
             successRate: Math.round(successRate * 10) / 10,
-            status: "processed"
+            status: "processed",
+            includeInDashboard: report.include_in_dashboard ?? true // Default to true if not set
           });
         }
 

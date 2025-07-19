@@ -8,46 +8,16 @@ export async function saveDmarcReport(
 ): Promise<string> {
   console.log(`[saveDmarcReport] Starting save operation for report ${report.reportMetadata.reportId} by user ${userId}`);
   
-  try {
-    // Use RPC for transaction-safe operation
-    const { data: result, error: rpcError } = await supabase.rpc('save_dmarc_report_transaction', {
-      p_user_id: userId,
-      p_domain: report.policyPublished.domain,
-      p_org_name: report.reportMetadata.orgName,
-      p_org_email: report.reportMetadata.email,
-      p_report_id: report.reportMetadata.reportId,
-      p_date_range_begin: report.reportMetadata.dateRange.begin,
-      p_date_range_end: report.reportMetadata.dateRange.end,
-      p_policy_domain: report.policyPublished.domain,
-      p_policy_dkim: report.policyPublished.dkim,
-      p_policy_spf: report.policyPublished.spf,
-      p_policy_p: report.policyPublished.p,
-      p_policy_sp: report.policyPublished.sp,
-      p_policy_pct: report.policyPublished.pct,
-      p_raw_xml: rawXml,
-      p_records: JSON.stringify(report.records)
-    });
-
-    if (rpcError) {
-      console.error(`[saveDmarcReport] RPC transaction failed:`, rpcError);
-      throw new Error(`Transaction failed: ${rpcError.message}`);
-    }
-
-    if (!result) {
-      console.error(`[saveDmarcReport] RPC returned null result`);
-      throw new Error('Transaction returned no result');
-    }
-
-    console.log(`[saveDmarcReport] Successfully saved report with ID: ${result}`);
-    return result;
-    
-  } catch (error) {
-    console.error(`[saveDmarcReport] Operation failed:`, error);
-    
-    // Fallback to manual transaction handling if RPC isn't available
-    console.log(`[saveDmarcReport] Falling back to manual transaction handling`);
-    return await saveDmarcReportManual(report, rawXml, userId);
+  // CRITICAL: Double-check for duplicates just before saving to prevent race conditions
+  console.log(`[saveDmarcReport] Final duplicate check before database operation`);
+  const finalDuplicateCheck = await checkDuplicateReport(report.reportMetadata.reportId, userId);
+  if (finalDuplicateCheck) {
+    console.error(`[saveDmarcReport] DUPLICATE DETECTED in final check: ${report.reportMetadata.reportId}`);
+    throw new Error(`Report ${report.reportMetadata.reportId} already exists in database`);
   }
+  
+  // Use manual transaction handling with proper error recovery
+  return await saveDmarcReportManual(report, rawXml, userId);
 }
 
 async function saveDmarcReportManual(
@@ -58,8 +28,17 @@ async function saveDmarcReportManual(
   console.log(`[saveDmarcReportManual] Starting manual save for report ${report.reportMetadata.reportId}`);
   
   let reportId: string | null = null;
+  let allDataSaved = false; // Track if we've successfully saved everything
   
   try {
+    // ONE MORE duplicate check right before insert (triple check for absolute safety)
+    console.log(`[saveDmarcReportManual] Triple-checking for duplicates before insert`);
+    const tripleCheck = await checkDuplicateReport(report.reportMetadata.reportId, userId);
+    if (tripleCheck) {
+      console.error(`[saveDmarcReportManual] DUPLICATE DETECTED in triple check: ${report.reportMetadata.reportId}`);
+      throw new Error(`Report ${report.reportMetadata.reportId} already exists - detected in final safety check`);
+    }
+
     // Insert main report
     console.log(`[saveDmarcReportManual] Inserting main report record`);
     const { data: reportData, error: reportError } = await supabase
@@ -79,12 +58,20 @@ async function saveDmarcReportManual(
         policy_sp: report.policyPublished.sp,
         policy_pct: report.policyPublished.pct,
         raw_xml: rawXml,
+        include_in_dashboard: true, // Default new reports to be included
       })
       .select('id')
       .single();
 
     if (reportError) {
       console.error(`[saveDmarcReportManual] Failed to save main report:`, reportError);
+      
+      // Check if this is a duplicate error from database constraints
+      if (reportError.message?.includes('duplicate') || reportError.message?.includes('unique') || reportError.code === '23505') {
+        console.error(`[saveDmarcReportManual] Database detected duplicate constraint violation`);
+        throw new Error(`Report ${report.reportMetadata.reportId} already exists - detected by database constraints`);
+      }
+      
       throw new Error(`Failed to save report: ${reportError.message}`);
     }
 
@@ -106,20 +93,26 @@ async function saveDmarcReportManual(
     // Execute all record saves
     await Promise.all(recordPromises);
     console.log(`[saveDmarcReportManual] All records processed successfully`);
+    
+    // Mark that all data was saved successfully
+    allDataSaved = true;
+    console.log(`[saveDmarcReportManual] COMPLETE: All data saved successfully for report ${report.reportMetadata.reportId}`);
 
     return reportId;
     
   } catch (error) {
     console.error(`[saveDmarcReportManual] Error occurred:`, error);
     
-    // If we have a reportId and encountered an error, try to clean up
-    if (reportId) {
-      console.log(`[saveDmarcReportManual] Attempting cleanup for report ID: ${reportId}`);
+    // If we have a reportId and NOT all data was saved, we need to clean up
+    if (reportId && !allDataSaved) {
+      console.error(`[saveDmarcReportManual] CRITICAL: Partial data detected, initiating cleanup for report ID: ${reportId}`);
       try {
         await cleanupPartialReport(reportId);
-        console.log(`[saveDmarcReportManual] Cleanup successful`);
+        console.log(`[saveDmarcReportManual] Cleanup successful - removed partial data`);
       } catch (cleanupError) {
-        console.error(`[saveDmarcReportManual] Cleanup failed:`, cleanupError);
+        console.error(`[saveDmarcReportManual] CRITICAL: Cleanup failed - partial data may remain in database:`, cleanupError);
+        // Log this as a critical issue that needs manual intervention
+        console.error(`[saveDmarcReportManual] MANUAL CLEANUP REQUIRED for report ID: ${reportId}`);
       }
     }
     
@@ -214,44 +207,68 @@ async function saveRecordWithAuthResults(reportId: string, record: DmarcRecord, 
 }
 
 async function cleanupPartialReport(reportId: string): Promise<void> {
-  console.log(`[cleanupPartialReport] Cleaning up partial report: ${reportId}`);
+  console.log(`[cleanupPartialReport] CRITICAL CLEANUP: Removing partial report data for ID: ${reportId}`);
+  
+  const cleanupErrors: string[] = [];
   
   try {
-    // Delete auth results first (foreign key dependency)
-    const { error: authError } = await supabase
-      .from('dmarc_auth_results')
-      .delete()
-      .in('record_id', 
-        supabase
-          .from('dmarc_records')
-          .select('id')
-          .eq('report_id', reportId)
-      );
+    // Step 1: Get all record IDs for this report first
+    console.log(`[cleanupPartialReport] Step 1: Finding records for report ${reportId}`);
+    const { data: recordIds, error: findError } = await supabase
+      .from('dmarc_records')
+      .select('id')
+      .eq('report_id', reportId);
+    
+    if (findError) {
+      cleanupErrors.push(`Failed to find records: ${findError.message}`);
+    } else if (recordIds && recordIds.length > 0) {
+      console.log(`[cleanupPartialReport] Found ${recordIds.length} records to clean up`);
+      
+      // Step 2: Delete auth results for those records
+      console.log(`[cleanupPartialReport] Step 2: Deleting auth results`);
+      const recordIdList = recordIds.map(r => r.id);
+      const { error: authError } = await supabase
+        .from('dmarc_auth_results')
+        .delete()
+        .in('record_id', recordIdList);
 
-    if (authError) {
-      console.error(`[cleanupPartialReport] Failed to delete auth results:`, authError);
+      if (authError) {
+        cleanupErrors.push(`Failed to delete auth results: ${authError.message}`);
+      } else {
+        console.log(`[cleanupPartialReport] Auth results deleted successfully`);
+      }
     }
 
-    // Delete records
+    // Step 3: Delete records
+    console.log(`[cleanupPartialReport] Step 3: Deleting records`);
     const { error: recordsError } = await supabase
       .from('dmarc_records')
       .delete()
       .eq('report_id', reportId);
 
     if (recordsError) {
-      console.error(`[cleanupPartialReport] Failed to delete records:`, recordsError);
+      cleanupErrors.push(`Failed to delete records: ${recordsError.message}`);
+    } else {
+      console.log(`[cleanupPartialReport] Records deleted successfully`);
     }
 
-    // Delete main report
+    // Step 4: Delete main report
+    console.log(`[cleanupPartialReport] Step 4: Deleting main report`);
     const { error: reportError } = await supabase
       .from('dmarc_reports')
       .delete()
       .eq('id', reportId);
 
     if (reportError) {
-      console.error(`[cleanupPartialReport] Failed to delete main report:`, reportError);
+      cleanupErrors.push(`Failed to delete main report: ${reportError.message}`);
     } else {
-      console.log(`[cleanupPartialReport] Successfully cleaned up report: ${reportId}`);
+      console.log(`[cleanupPartialReport] Main report deleted successfully`);
+    }
+    
+    if (cleanupErrors.length === 0) {
+      console.log(`[cleanupPartialReport] SUCCESS: Complete cleanup of report ${reportId}`);
+    } else {
+      console.error(`[cleanupPartialReport] PARTIAL CLEANUP: Some errors occurred:`, cleanupErrors);
     }
 
   } catch (error) {
@@ -276,4 +293,88 @@ export async function checkDuplicateReport(
   }
 
   return !!data;
+}
+
+export async function deleteDmarcReport(
+  reportDbId: string, 
+  userId: string
+): Promise<void> {
+  console.log(`[deleteDmarcReport] Starting deletion for report ${reportDbId} by user ${userId}`);
+  
+  try {
+    // First verify the report belongs to the user for security
+    const { data: reportData, error: verifyError } = await supabase
+      .from('dmarc_reports')
+      .select('id, report_id')
+      .eq('id', reportDbId)
+      .eq('user_id', userId)
+      .single();
+
+    if (verifyError) {
+      console.error(`[deleteDmarcReport] Failed to verify report ownership:`, verifyError);
+      throw new Error(`Failed to verify report ownership: ${verifyError.message}`);
+    }
+
+    if (!reportData) {
+      console.error(`[deleteDmarcReport] Report not found or not owned by user`);
+      throw new Error('Report not found or you do not have permission to delete it');
+    }
+
+    console.log(`[deleteDmarcReport] Verified ownership of report ${reportData.report_id}, proceeding with deletion`);
+
+    // Use the existing cleanup function to perform the deletion
+    await cleanupPartialReport(reportDbId);
+    
+    console.log(`[deleteDmarcReport] Successfully deleted report ${reportData.report_id}`);
+    
+  } catch (error) {
+    console.error(`[deleteDmarcReport] Delete operation failed:`, error);
+    throw new Error(`Failed to delete report: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function updateReportDashboardInclusion(
+  reportDbId: string, 
+  userId: string, 
+  includeInDashboard: boolean
+): Promise<void> {
+  console.log(`[updateReportDashboardInclusion] Updating dashboard inclusion for report ${reportDbId} to ${includeInDashboard}`);
+  
+  try {
+    // First verify the report belongs to the user for security
+    const { data: reportData, error: verifyError } = await supabase
+      .from('dmarc_reports')
+      .select('id, report_id')
+      .eq('id', reportDbId)
+      .eq('user_id', userId)
+      .single();
+
+    if (verifyError) {
+      console.error(`[updateReportDashboardInclusion] Failed to verify report ownership:`, verifyError);
+      throw new Error(`Failed to verify report ownership: ${verifyError.message}`);
+    }
+
+    if (!reportData) {
+      console.error(`[updateReportDashboardInclusion] Report not found or not owned by user`);
+      throw new Error('Report not found or you do not have permission to update it');
+    }
+
+    // Update the include_in_dashboard field
+    const { error: updateError } = await supabase
+      .from('dmarc_reports')
+      .update({ include_in_dashboard: includeInDashboard })
+      .eq('id', reportDbId)
+      .eq('user_id', userId);
+
+    if (updateError) {
+      console.error(`[updateReportDashboardInclusion] Failed to update dashboard inclusion:`, updateError);
+      throw new Error(`Failed to update dashboard inclusion: ${updateError.message}`);
+    }
+
+    console.log(`[updateReportDashboardInclusion] Successfully updated report ${reportData.report_id} dashboard inclusion to ${includeInDashboard}`);
+    
+  } catch (error) {
+    console.error(`[updateReportDashboardInclusion] Update operation failed:`, error);
+    throw new Error(`Failed to update dashboard inclusion: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }

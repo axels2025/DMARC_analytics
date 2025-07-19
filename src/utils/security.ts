@@ -134,25 +134,31 @@ export interface FileValidationResult {
 }
 
 export function validateUploadedFile(file: File): FileValidationResult {
+  console.log(`[validateUploadedFile] Validating file: ${file.name} (${file.size} bytes, type: ${file.type})`);
   const warnings: string[] = [];
   
   // Check file size (50MB limit)
   const maxSize = 50 * 1024 * 1024;
   if (file.size > maxSize) {
+    console.error(`[validateUploadedFile] File too large: ${file.size} bytes`);
     return { isValid: false, error: 'File size exceeds 50MB limit' };
   }
 
   // Check file type
   const allowedTypes = ['application/xml', 'text/xml'];
   if (!allowedTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.xml')) {
+    console.error(`[validateUploadedFile] Invalid file type: ${file.type} and doesn't end with .xml`);
     return { isValid: false, error: 'Only XML files are allowed' };
   }
 
-  // Check filename for suspicious patterns
+  // Check filename - only require .xml extension, allow any characters
   const filename = file.name;
-  if (!/^[a-zA-Z0-9._-]+\.xml$/i.test(filename)) {
-    return { isValid: false, error: 'Invalid filename format' };
+  if (!filename.toLowerCase().endsWith('.xml')) {
+    console.error(`[validateUploadedFile] File doesn't end with .xml: ${filename}`);
+    return { isValid: false, error: 'File must have .xml extension' };
   }
+  
+  console.log(`[validateUploadedFile] Filename validation passed: ${filename}`);
 
   // Check for suspiciously long filenames
   if (filename.length > 255) {
@@ -164,5 +170,6 @@ export function validateUploadedFile(file: File): FileValidationResult {
     warnings.push('Large file detected. Processing may take longer.');
   }
 
+  console.log(`[validateUploadedFile] File validation completed successfully for: ${filename}`);
   return { isValid: true, warnings };
 }
