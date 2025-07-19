@@ -45,9 +45,71 @@ export interface DmarcRecord {
   };
 }
 
-// Helper function to get text content from XML element
+// Input validation and sanitization functions
+function sanitizeText(text: string, maxLength: number = 1000): string {
+  if (!text) return '';
+  
+  // Remove any HTML/script tags for XSS prevention
+  const cleanText = text.replace(/<[^>]*>/g, '');
+  
+  // Limit length to prevent DoS attacks
+  const truncated = cleanText.slice(0, maxLength);
+  
+  // Remove null bytes and control characters except newlines/tabs
+  return truncated.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+function validateDomain(domain: string): string {
+  const sanitized = sanitizeText(domain, 253); // Max domain length
+  
+  // Basic domain validation - only allow valid domain characters
+  if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(sanitized)) {
+    throw new Error(`Invalid domain format: ${sanitized}`);
+  }
+  
+  return sanitized;
+}
+
+function validateEmail(email: string): string {
+  const sanitized = sanitizeText(email, 254); // Max email length
+  
+  // Basic email validation
+  if (sanitized && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitized)) {
+    throw new Error(`Invalid email format: ${sanitized}`);
+  }
+  
+  return sanitized;
+}
+
+function validateIpAddress(ip: string): string {
+  const sanitized = sanitizeText(ip, 45); // Max IPv6 length
+  
+  // Basic IP validation (IPv4 or IPv6)
+  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+  const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$/;
+  
+  if (sanitized && !ipv4Regex.test(sanitized) && !ipv6Regex.test(sanitized)) {
+    throw new Error(`Invalid IP address format: ${sanitized}`);
+  }
+  
+  return sanitized;
+}
+
+function validateNumeric(value: string, min: number = 0, max: number = Number.MAX_SAFE_INTEGER): number {
+  const sanitized = sanitizeText(value, 20);
+  const parsed = parseInt(sanitized) || 0;
+  
+  if (parsed < min || parsed > max) {
+    throw new Error(`Numeric value out of range: ${parsed}`);
+  }
+  
+  return parsed;
+}
+
+// Helper function to get text content from XML element with validation
 function getTextContent(element: Element | null): string {
-  return element?.textContent?.trim() || '';
+  const content = element?.textContent?.trim() || '';
+  return sanitizeText(content);
 }
 
 // Helper function to get all child elements with a specific tag name
@@ -102,21 +164,21 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
 
     const parsedReport: DmarcReport = {
       reportMetadata: {
-        orgName: getTextContent(getFirstChildElement(reportMetadata, 'org_name')),
-        email: getTextContent(getFirstChildElement(reportMetadata, 'email')),
-        reportId: getTextContent(getFirstChildElement(reportMetadata, 'report_id')),
+        orgName: sanitizeText(getTextContent(getFirstChildElement(reportMetadata, 'org_name')), 200),
+        email: validateEmail(getTextContent(getFirstChildElement(reportMetadata, 'email'))),
+        reportId: sanitizeText(getTextContent(getFirstChildElement(reportMetadata, 'report_id')), 100),
         dateRange: {
           begin: dateRangeBegin,
           end: dateRangeEnd,
         },
       },
       policyPublished: {
-        domain: getTextContent(getFirstChildElement(policyPublished, 'domain')),
-        dkim: getTextContent(getFirstChildElement(policyPublished, 'adkim')) || 'r',
-        spf: getTextContent(getFirstChildElement(policyPublished, 'aspf')) || 'r',
-        p: getTextContent(getFirstChildElement(policyPublished, 'p')) || 'none',
-        sp: getTextContent(getFirstChildElement(policyPublished, 'sp')) || undefined,
-        pct: parseInt(getTextContent(getFirstChildElement(policyPublished, 'pct'))) || 100,
+        domain: validateDomain(getTextContent(getFirstChildElement(policyPublished, 'domain'))),
+        dkim: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'adkim')), 10) || 'r',
+        spf: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'aspf')), 10) || 'r',
+        p: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'p')), 20) || 'none',
+        sp: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'sp')), 20) || undefined,
+        pct: validateNumeric(getTextContent(getFirstChildElement(policyPublished, 'pct')), 0, 100) || 100,
       },
       records: recordElements.map((recordElement: Element) => {
         const row = getFirstChildElement(recordElement, 'row');
@@ -124,33 +186,33 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
         const authResults = getFirstChildElement(recordElement, 'auth_results');
         const policyEvaluated = getFirstChildElement(row, 'policy_evaluated');
 
-        // Parse DKIM results
+        // Parse DKIM results with validation
         const dkimElements = authResults ? getChildElements(authResults, 'dkim') : [];
         const dkimResults = dkimElements.map((dkim: Element) => ({
-          domain: getTextContent(getFirstChildElement(dkim, 'domain')),
-          selector: getTextContent(getFirstChildElement(dkim, 'selector')) || undefined,
-          result: getTextContent(getFirstChildElement(dkim, 'result')) || 'fail',
+          domain: validateDomain(getTextContent(getFirstChildElement(dkim, 'domain'))),
+          selector: sanitizeText(getTextContent(getFirstChildElement(dkim, 'selector')), 100) || undefined,
+          result: sanitizeText(getTextContent(getFirstChildElement(dkim, 'result')), 20) || 'fail',
         }));
 
-        // Parse SPF results
+        // Parse SPF results with validation
         const spfElements = authResults ? getChildElements(authResults, 'spf') : [];
         const spfResults = spfElements.map((spf: Element) => ({
-          domain: getTextContent(getFirstChildElement(spf, 'domain')),
-          result: getTextContent(getFirstChildElement(spf, 'result')) || 'fail',
+          domain: validateDomain(getTextContent(getFirstChildElement(spf, 'domain'))),
+          result: sanitizeText(getTextContent(getFirstChildElement(spf, 'result')), 20) || 'fail',
         }));
 
         return {
           row: {
-            sourceIp: getTextContent(getFirstChildElement(row, 'source_ip')),
-            count: parseInt(getTextContent(getFirstChildElement(row, 'count'))) || 0,
+            sourceIp: validateIpAddress(getTextContent(getFirstChildElement(row, 'source_ip'))),
+            count: validateNumeric(getTextContent(getFirstChildElement(row, 'count')), 1, 1000000),
             policyEvaluated: {
-              disposition: getTextContent(getFirstChildElement(policyEvaluated, 'disposition')) || 'none',
-              dkim: getTextContent(getFirstChildElement(policyEvaluated, 'dkim')) || 'fail',
-              spf: getTextContent(getFirstChildElement(policyEvaluated, 'spf')) || 'fail',
+              disposition: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'disposition')), 20) || 'none',
+              dkim: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'dkim')), 20) || 'fail',
+              spf: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'spf')), 20) || 'fail',
             },
           },
           identifiers: {
-            headerFrom: getTextContent(getFirstChildElement(identifiers, 'header_from')),
+            headerFrom: validateDomain(getTextContent(getFirstChildElement(identifiers, 'header_from'))),
           },
           authResults: {
             dkim: dkimResults.length > 0 ? dkimResults : undefined,

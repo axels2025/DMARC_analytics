@@ -17,6 +17,7 @@ import { toast } from "@/hooks/use-toast";
 import { parseDmarcXml, validateDmarcXml } from '@/utils/dmarcParser';
 import { saveDmarcReport, checkDuplicateReport } from '@/utils/dmarcDatabase';
 import { supabase } from '@/integrations/supabase/client';
+import { uploadRateLimiter, validateUploadedFile } from '@/utils/security';
 
 interface UploadStatus {
   status: "idle" | "uploading" | "processing" | "success" | "error";
@@ -36,12 +37,45 @@ const Upload = () => {
   // Process DMARC file
   const processFile = async (file: File) => {
     try {
+      // Get current user for rate limiting
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error('User not authenticated. Please sign in to upload reports.');
+      }
+
+      // Rate limiting check
+      const userId = user.id;
+      if (!uploadRateLimiter.canAttempt(userId)) {
+        const remaining = uploadRateLimiter.getRemainingAttempts(userId);
+        throw new Error(`Upload rate limit exceeded. ${remaining} uploads remaining this minute.`);
+      }
+
+      // Security validation
+      const fileValidation = validateUploadedFile(file);
+      if (!fileValidation.isValid) {
+        throw new Error(fileValidation.error || 'File validation failed');
+      }
+
+      // Show warnings if any
+      if (fileValidation.warnings && fileValidation.warnings.length > 0) {
+        fileValidation.warnings.forEach(warning => {
+          toast({
+            title: "Warning",
+            description: warning,
+            variant: "default",
+          });
+        });
+      }
+
       setUploadStatus({
         status: "uploading",
         progress: 10,
         message: "Reading file...",
         fileName: file.name
       });
+
+      // Record upload attempt
+      uploadRateLimiter.recordAttempt(userId);
 
       // Read file content
       const fileContent = await file.text();
@@ -53,9 +87,9 @@ const Upload = () => {
       }));
 
       // Validate XML
-      const validation = validateDmarcXml(fileContent);
-      if (!validation.isValid) {
-        throw new Error(validation.error || 'Invalid XML format');
+      const xmlValidation = validateDmarcXml(fileContent);
+      if (!xmlValidation.isValid) {
+        throw new Error(xmlValidation.error || 'Invalid XML format');
       }
 
       setUploadStatus(prev => ({
@@ -73,11 +107,7 @@ const Upload = () => {
         message: "Checking for duplicates..."
       }));
 
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('User not authenticated. Please sign in to upload reports.');
-      }
+      // User already validated above
 
       // Check for duplicate
       const isDuplicate = await checkDuplicateReport(report.reportMetadata.reportId, user.id);
@@ -128,6 +158,29 @@ const Upload = () => {
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
+      
+      // Enhanced file validation
+      const maxFileSize = 50 * 1024 * 1024; // 50MB limit
+      if (file.size > maxFileSize) {
+        toast({
+          title: "File too large",
+          description: "File size must be less than 50MB.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Validate file type more strictly
+      const allowedTypes = ['application/xml', 'text/xml'];
+      if (!allowedTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.xml')) {
+        toast({
+          title: "Invalid file type",
+          description: "Only XML files are allowed.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       processFile(file);
     }
   }, []);
@@ -139,7 +192,17 @@ const Upload = () => {
       'application/xml': ['.xml']
     },
     maxFiles: 1,
-    maxSize: 10 * 1024 * 1024 // 10MB
+    maxSize: 50 * 1024 * 1024, // 50MB limit
+    validator: (file) => {
+      // Additional file name validation
+      if (!/^[a-zA-Z0-9._-]+\.xml$/i.test(file.name)) {
+        return {
+          code: 'invalid-filename',
+          message: 'Invalid filename. Only alphanumeric characters, dots, hyphens, and underscores are allowed.'
+        };
+      }
+      return null;
+    }
   });
 
   const resetUpload = () => {
@@ -195,7 +258,7 @@ const Upload = () => {
               <ul className="space-y-1 text-sm text-gray-600">
                 <li>• XML files (.xml extension)</li>
                 <li>• Standard DMARC report format</li>
-                <li>• Maximum file size: 10MB</li>
+                <li>• Maximum file size: 50MB</li>
                 <li>• Compressed reports (coming soon)</li>
               </ul>
             </div>

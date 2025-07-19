@@ -156,11 +156,11 @@ async function fetchExportData(userId: string): Promise<ProcessedReportData[]> {
     const spfPassRate = totalEmails > 0 ? Math.round((spfPassEmails / totalEmails) * 100 * 10) / 10 : 0;
 
     // Group by IP and get provider information
-    const uniqueIPs = [...new Set(records.map(r => r.source_ip))];
+    const uniqueIPs = [...new Set(records.map(r => r.source_ip))].filter((ip): ip is string => typeof ip === 'string');
     const providerMap = await detectIPProviders(uniqueIPs);
 
     const providerGroups = records.reduce((acc: Record<string, { count: number; passed: number }>, record) => {
-      const provider = providerMap.get(record.source_ip) || 'Unknown Provider';
+      const provider = (typeof record.source_ip === 'string' ? providerMap.get(record.source_ip) : null) || 'Unknown Provider';
       if (!acc[provider]) {
         acc[provider] = { count: 0, passed: 0 };
       }
