@@ -35,12 +35,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    console.log('[AuthProvider] Setting up auth state listener');
+    
     // Set up auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
+        console.log(`[AuthProvider] Auth state changed - event: ${event}, session:`, session ? 'exists' : 'null');
+        
         // Validate session integrity
         if (session && !validateSessionIntegrity(session)) {
-          console.warn('Invalid session detected, signing out');
+          console.warn('[AuthProvider] Invalid session detected, signing out');
           supabase.auth.signOut();
           return;
         }
@@ -48,13 +52,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setSession(session);
         setUser(session?.user ?? null);
         setLoading(false);
+        
+        console.log(`[AuthProvider] State updated - user: ${session?.user?.id || 'null'}`);
       }
     );
 
     // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    console.log('[AuthProvider] Checking for existing session');
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      console.log('[AuthProvider] Existing session check result:', session ? 'found' : 'none', error ? `Error: ${error.message}` : '');
+      
+      if (session && validateSessionIntegrity(session)) {
+        setSession(session);
+        setUser(session?.user ?? null);
+        console.log(`[AuthProvider] Restored session for user: ${session.user?.id}`);
+      } else {
+        setSession(null);
+        setUser(null);
+        console.log('[AuthProvider] No valid session found');
+      }
       setLoading(false);
     });
 

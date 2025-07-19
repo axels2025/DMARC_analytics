@@ -17,7 +17,8 @@ import { toast } from "@/hooks/use-toast";
 import { parseDmarcXml, validateDmarcXml } from '@/utils/dmarcParser';
 import { saveDmarcReport, checkDuplicateReport } from '@/utils/dmarcDatabase';
 import { supabase } from '@/integrations/supabase/client';
-import { uploadRateLimiter, validateUploadedFile } from '@/utils/security';
+import { uploadRateLimiter, validateUploadedFile, validateSessionIntegrity } from '@/utils/security';
+import { useAuth } from '@/hooks/useAuth';
 
 interface UploadStatus {
   status: "idle" | "uploading" | "processing" | "success" | "error";
@@ -28,6 +29,7 @@ interface UploadStatus {
 }
 
 const Upload = () => {
+  const { user, session } = useAuth();
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>({
     status: "idle",
     progress: 0,
@@ -35,25 +37,45 @@ const Upload = () => {
   });
 
   // Process DMARC file
-  const processFile = async (file: File) => {
+  const processFile = useCallback(async (file: File) => {
+    console.log(`[processFile] Starting upload process for file: ${file.name} (${file.size} bytes)`);
+    
     try {
-      // Get current user for rate limiting
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      // Enhanced authentication validation using React context
+      console.log(`[processFile] Validating user authentication`);
+      console.log(`[processFile] User from context:`, user ? user.id : 'null');
+      console.log(`[processFile] Session from context:`, session ? 'exists' : 'null');
+      
+      if (!user || !session) {
+        console.error(`[processFile] No user or session found in context`);
         throw new Error('User not authenticated. Please sign in to upload reports.');
       }
 
-      // Rate limiting check
-      const userId = user.id;
-      if (!uploadRateLimiter.canAttempt(userId)) {
-        const remaining = uploadRateLimiter.getRemainingAttempts(userId);
-        throw new Error(`Upload rate limit exceeded. ${remaining} uploads remaining this minute.`);
+      // Validate session integrity
+      if (!validateSessionIntegrity(session)) {
+        console.error(`[processFile] Session integrity check failed`);
+        throw new Error('Session expired or invalid. Please sign in again.');
       }
 
-      // Security validation
+      console.log(`[processFile] User authenticated: ${user.id}`);
+      const userId = user.id;
+
+      // Security validation before rate limiting
+      console.log(`[processFile] Validating file security`);
       const fileValidation = validateUploadedFile(file);
       if (!fileValidation.isValid) {
+        console.error(`[processFile] File validation failed:`, fileValidation.error);
         throw new Error(fileValidation.error || 'File validation failed');
+      }
+
+      // Rate limiting check (after validation to prevent abuse)
+      console.log(`[processFile] Checking rate limits for user: ${userId}`);
+      if (!uploadRateLimiter.canAttempt(userId)) {
+        const remaining = uploadRateLimiter.getRemainingAttempts(userId);
+        const resetTime = uploadRateLimiter.getResetTime(userId);
+        const resetDate = resetTime ? new Date(resetTime).toLocaleTimeString() : 'soon';
+        console.warn(`[processFile] Rate limit exceeded for user: ${userId}`);
+        throw new Error(`Upload rate limit exceeded. ${remaining} uploads remaining. Limit resets at ${resetDate}.`);
       }
 
       // Show warnings if any
@@ -70,138 +92,235 @@ const Upload = () => {
       setUploadStatus({
         status: "uploading",
         progress: 10,
-        message: "Reading file...",
+        message: "Reading and validating file content...",
         fileName: file.name
       });
 
       // Record upload attempt
       uploadRateLimiter.recordAttempt(userId);
 
-      // Read file content
-      const fileContent = await file.text();
+      // Read file content with timeout
+      console.log(`[processFile] Reading file content`);
+      const fileContent = await Promise.race([
+        file.text(),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('File read timeout after 30 seconds')), 30000)
+        )
+      ]);
+      
+      console.log(`[processFile] File content read successfully (${fileContent.length} characters)`);
       
       setUploadStatus(prev => ({
         ...prev,
         progress: 30,
-        message: "Validating XML format..."
+        message: "Validating DMARC XML structure and format..."
       }));
 
-      // Validate XML
+      // Validate XML with enhanced error reporting
+      console.log(`[processFile] Validating XML format`);
       const xmlValidation = validateDmarcXml(fileContent);
       if (!xmlValidation.isValid) {
-        throw new Error(xmlValidation.error || 'Invalid XML format');
+        console.error(`[processFile] XML validation failed:`, xmlValidation.error);
+        throw new Error(`XML validation failed: ${xmlValidation.error || 'Invalid DMARC XML format'}`);
       }
+      console.log(`[processFile] XML validation passed`);
 
       setUploadStatus(prev => ({
         ...prev,
         progress: 50,
-        message: "Parsing DMARC report..."
+        message: "Extracting email authentication data..."
       }));
 
-      // Parse DMARC report
-      const report = await parseDmarcXml(fileContent);
+      // Parse DMARC report with timeout
+      console.log(`[processFile] Parsing DMARC XML`);
+      const report = await Promise.race([
+        parseDmarcXml(fileContent),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('XML parsing timeout after 60 seconds')), 60000)
+        )
+      ]);
+      
+      console.log(`[processFile] Successfully parsed report for domain: ${report.policyPublished.domain} with ${report.records.length} records`);
 
       setUploadStatus(prev => ({
         ...prev,
         progress: 70,
-        message: "Checking for duplicates..."
+        message: "Verifying report uniqueness..."
       }));
 
       // User already validated above
 
-      // Check for duplicate
-      const isDuplicate = await checkDuplicateReport(report.reportMetadata.reportId, user.id);
+      // Check for duplicate with enhanced logging
+      console.log(`[processFile] Checking for duplicate report: ${report.reportMetadata.reportId}`);
+      const isDuplicate = await Promise.race([
+        checkDuplicateReport(report.reportMetadata.reportId, user.id),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Duplicate check timeout after 10 seconds')), 10000)
+        )
+      ]);
+      
       if (isDuplicate) {
-        throw new Error('This report has already been uploaded');
+        console.warn(`[processFile] Duplicate report detected: ${report.reportMetadata.reportId}`);
+        throw new Error(`This report (ID: ${report.reportMetadata.reportId}) has already been uploaded`);
       }
+      console.log(`[processFile] No duplicate found, proceeding with save`);
 
       setUploadStatus(prev => ({
         ...prev,
         progress: 90,
-        message: "Saving to database..."
+        message: "Storing report data securely..."
       }));
 
-      // Save to database
-      const reportId = await saveDmarcReport(report, fileContent, user.id);
+      // Save to database with timeout
+      console.log(`[processFile] Saving report to database`);
+      const reportId = await Promise.race([
+        saveDmarcReport(report, fileContent, user.id),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Database save timeout after 120 seconds')), 120000)
+        )
+      ]);
+      
+      console.log(`[processFile] Successfully saved report with database ID: ${reportId}`);
 
       setUploadStatus({
         status: "success",
         progress: 100,
-        message: "DMARC report processed successfully!",
+        message: `Successfully processed ${report.records.length} authentication records from ${report.policyPublished.domain}`,
         fileName: file.name,
         reportId
       });
 
       toast({
         title: "Upload Successful",
-        description: `DMARC report for ${report.policyPublished.domain} has been processed.`,
+        description: `DMARC report for ${report.policyPublished.domain} processed successfully. ${report.records.length} records imported.`,
       });
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      console.error(`[processFile] Upload failed for file ${file.name}:`, error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed due to an unknown error';
+      
+      // Enhanced error categorization for better user feedback
+      let userFriendlyMessage = errorMessage;
+      let shouldRetry = false;
+      
+      if (errorMessage.includes('timeout')) {
+        userFriendlyMessage = 'Upload timed out. Please try again with a smaller file or check your connection.';
+        shouldRetry = true;
+      } else if (errorMessage.includes('rate limit')) {
+        userFriendlyMessage = errorMessage; // Rate limit messages are already user-friendly
+        shouldRetry = false;
+      } else if (errorMessage.includes('Authentication') || errorMessage.includes('Session')) {
+        userFriendlyMessage = 'Your session has expired. Please refresh the page and sign in again.';
+        shouldRetry = false;
+      } else if (errorMessage.includes('XML validation') || errorMessage.includes('parsing')) {
+        userFriendlyMessage = `Invalid DMARC report format: ${errorMessage.replace('XML validation failed: ', '')}`;
+        shouldRetry = false;
+      } else if (errorMessage.includes('duplicate')) {
+        userFriendlyMessage = errorMessage; // Duplicate messages are already clear
+        shouldRetry = false;
+      } else if (errorMessage.includes('Database') || errorMessage.includes('Transaction')) {
+        userFriendlyMessage = 'Database error occurred. Please try again in a few moments.';
+        shouldRetry = true;
+      }
       
       setUploadStatus({
         status: "error",
         progress: 0,
-        message: errorMessage,
+        message: userFriendlyMessage,
         fileName: file.name
       });
 
       toast({
         title: "Upload Failed",
-        description: errorMessage,
+        description: userFriendlyMessage + (shouldRetry ? ' You can try again.' : ''),
         variant: "destructive",
       });
+      
+      // Log detailed error for debugging
+      console.error(`[processFile] Error details:`, {
+        fileName: file.name,
+        fileSize: file.size,
+        errorType: error.constructor.name,
+        errorMessage: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined
+      });
     }
-  };
+  }, [user, session]);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback((acceptedFiles: File[], rejectedFiles: { file: File; errors: { code: string; message: string }[] }[]) => {
+    console.log(`[onDrop] Called with ${acceptedFiles.length} accepted files and ${rejectedFiles.length} rejected files`);
+    
+    // Handle rejected files
+    rejectedFiles.forEach((fileRejection, index) => {
+      const { file, errors } = fileRejection;
+      console.error(`[onDrop] Rejected file ${index}: ${file.name}`, errors);
+      
+      const errorMessages = errors.map((error: { code: string; message: string }) => {
+        switch (error.code) {
+          case 'file-too-large':
+            return 'File size must be less than 50MB';
+          case 'file-invalid-type':
+            return 'Only XML files are allowed';
+          case 'invalid-file-extension':
+            return 'File must have .xml extension';
+          default:
+            return error.message || 'File validation failed';
+        }
+      });
+      
+      toast({
+        title: "File Upload Error",
+        description: `${file.name}: ${errorMessages.join(', ')}`,
+        variant: "destructive",
+      });
+    });
+    
+    // Process accepted files
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
-      
-      // Enhanced file validation
-      const maxFileSize = 50 * 1024 * 1024; // 50MB limit
-      if (file.size > maxFileSize) {
-        toast({
-          title: "File too large",
-          description: "File size must be less than 50MB.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // Validate file type more strictly
-      const allowedTypes = ['application/xml', 'text/xml'];
-      if (!allowedTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.xml')) {
-        toast({
-          title: "Invalid file type",
-          description: "Only XML files are allowed.",
-          variant: "destructive",
-        });
-        return;
-      }
-
+      console.log(`[onDrop] Processing accepted file: ${file.name} (${file.size} bytes, type: ${file.type})`);
       processFile(file);
     }
-  }, []);
+  }, [processFile]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
       'text/xml': ['.xml'],
-      'application/xml': ['.xml']
+      'application/xml': ['.xml'],
+      // Also accept files with no detected MIME type but .xml extension
+      '': ['.xml']
     },
     maxFiles: 1,
     maxSize: 50 * 1024 * 1024, // 50MB limit
     validator: (file) => {
-      // Additional file name validation
-      if (!/^[a-zA-Z0-9._-]+\.xml$/i.test(file.name)) {
+      console.log(`[dropzone validator] Validating file: ${file.name}, type: ${file.type}, size: ${file.size}`);
+      
+      // Check file extension first (more reliable than MIME type)
+      if (!file.name.toLowerCase().endsWith('.xml')) {
+        console.log(`[dropzone validator] File rejected: not .xml extension`);
         return {
-          code: 'invalid-filename',
-          message: 'Invalid filename. Only alphanumeric characters, dots, hyphens, and underscores are allowed.'
+          code: 'invalid-file-extension',
+          message: 'File must have .xml extension'
         };
       }
+      
+      // No filename pattern validation - allow any characters in filename
+      // Only requirement is .xml extension which is already checked above
+      
+      console.log(`[dropzone validator] File validation passed: ${file.name}`);
       return null;
+    },
+    // Add debugging for dropzone events
+    onDropAccepted: (files) => {
+      console.log(`[dropzone] onDropAccepted called with ${files.length} files`);
+    },
+    onDropRejected: (fileRejections) => {
+      console.log(`[dropzone] onDropRejected called with ${fileRejections.length} rejections`);
+    },
+    onFileDialogCancel: () => {
+      console.log(`[dropzone] File dialog was cancelled`);
     }
   });
 
@@ -233,8 +352,28 @@ const Upload = () => {
     }
   };
 
+  // Debug: Log render state
+  console.log(`[Upload component] Rendering with status:`, uploadStatus);
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* Debug Section - Remove in production */}
+      {process.env.NODE_ENV === 'development' && (
+        <Card className="bg-yellow-50 border-yellow-200">
+          <CardHeader>
+            <CardTitle className="text-sm text-yellow-800">Debug Info</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-yellow-700">
+            <div>Auth User: {user ? user.id : 'null'}</div>
+            <div>Auth Session: {session ? 'exists' : 'null'}</div>
+            <div>Upload Status: {uploadStatus.status}</div>
+            <div>Progress: {uploadStatus.progress}%</div>
+            <div>Message: {uploadStatus.message}</div>
+            <div>File Name: {uploadStatus.fileName || 'None'}</div>
+          </CardContent>
+        </Card>
+      )}
+      
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Upload DMARC Report</h1>
@@ -301,6 +440,12 @@ const Upload = () => {
                   </p>
                   <p className="text-gray-600 mb-4">or click to browse files</p>
                   <Button variant="outline">Browse Files</Button>
+                  {process.env.NODE_ENV === 'development' && (
+                    <div className="mt-4 text-xs text-gray-500">
+                      <div>Dropzone active: {isDragActive ? 'true' : 'false'}</div>
+                      <div>Accepted types: text/xml, application/xml</div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

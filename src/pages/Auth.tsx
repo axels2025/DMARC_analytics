@@ -22,7 +22,7 @@ const Auth = () => {
   useEffect(() => {
     // Check if user is already logged in
     if (user) {
-      navigate("/");
+      navigate("/dashboard");
     }
   }, [user, navigate]);
 
@@ -55,7 +55,7 @@ const Auth = () => {
     if (result.error) {
       setError(result.error.message);
     } else {
-      navigate("/");
+      navigate("/dashboard");
     }
     
     setLoading(false);

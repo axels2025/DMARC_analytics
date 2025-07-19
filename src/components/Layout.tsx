@@ -1,9 +1,10 @@
 
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Shield, BarChart3, Upload, Menu, X } from "lucide-react";
+import { Shield, BarChart3, Upload, Menu, X, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,9 +13,10 @@ interface LayoutProps {
 const Layout = ({ children }: LayoutProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+  const { signOut, user } = useAuth();
 
   const navigation = [
-    { name: "Dashboard", href: "/", icon: BarChart3 },
+    { name: "Dashboard", href: "/dashboard", icon: BarChart3 },
     { name: "Upload Report", href: "/upload", icon: Upload },
   ];
 
@@ -93,6 +95,17 @@ const Layout = ({ children }: LayoutProps) => {
             <span className="text-sm text-gray-500">
               DMARC Report Analysis Dashboard
             </span>
+            {user && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={signOut}
+                className="flex items-center space-x-2"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>Sign Out</span>
+              </Button>
+            )}
           </div>
         </div>
 

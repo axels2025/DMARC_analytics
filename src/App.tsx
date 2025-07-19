@@ -6,10 +6,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
+// import UploadSimple from "./pages/UploadSimple"; // Keep for debugging if needed
 import ReportDetail from "./pages/ReportDetail";
 import Auth from "./pages/Auth";
 import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AuthGuard from "./components/AuthGuard";
 import { AuthProvider } from "./hooks/useAuth";
 
 const queryClient = new QueryClient();
@@ -21,20 +23,33 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
-          <Routes>
-            <Route path="/auth" element={<Auth />} />
-            <Route path="/*" element={
-              <ProtectedRoute>
-                <Layout>
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/upload" element={<Upload />} />
-                    <Route path="/report/:id" element={<ReportDetail />} />
-                  </Routes>
-                </Layout>
-              </ProtectedRoute>
-            } />
-          </Routes>
+          <AuthGuard>
+            <Routes>
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/dashboard" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Dashboard />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/upload" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Upload />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="/report/:id" element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ReportDetail />
+                  </Layout>
+                </ProtectedRoute>
+              } />
+              <Route path="*" element={<Auth />} />
+            </Routes>
+          </AuthGuard>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

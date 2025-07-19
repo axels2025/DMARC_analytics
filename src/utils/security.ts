@@ -104,14 +104,20 @@ export function sanitizeForDisplay(input: string): string {
 /**
  * Validate session integrity
  */
-export function validateSessionIntegrity(session: any): boolean {
-  if (!session || !session.access_token || !session.user) {
+export function validateSessionIntegrity(session: unknown): boolean {
+  if (!session || typeof session !== 'object') {
+    return false;
+  }
+
+  const sessionObj = session as Record<string, unknown>;
+  
+  if (!sessionObj.access_token || !sessionObj.user) {
     return false;
   }
 
   // Check if session is expired
-  const expiresAt = session.expires_at;
-  if (expiresAt && Date.now() / 1000 > expiresAt) {
+  const expiresAt = sessionObj.expires_at;
+  if (typeof expiresAt === 'number' && Date.now() / 1000 > expiresAt) {
     return false;
   }
 

@@ -56,7 +56,8 @@ function sanitizeText(text: string, maxLength: number = 1000): string {
   const truncated = cleanText.slice(0, maxLength);
   
   // Remove null bytes and control characters except newlines/tabs
-  return truncated.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  // eslint-disable-next-line no-control-regex
+  return truncated.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
 function validateDomain(domain: string): string {
@@ -84,15 +85,53 @@ function validateEmail(email: string): string {
 function validateIpAddress(ip: string): string {
   const sanitized = sanitizeText(ip, 45); // Max IPv6 length
   
-  // Basic IP validation (IPv4 or IPv6)
-  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
-  const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::1$|^::$/;
+  console.log(`[validateIpAddress] Validating IP: "${sanitized}"`);
   
-  if (sanitized && !ipv4Regex.test(sanitized) && !ipv6Regex.test(sanitized)) {
-    throw new Error(`Invalid IP address format: ${sanitized}`);
+  if (!sanitized) {
+    throw new Error('IP address cannot be empty');
   }
   
-  return sanitized;
+  // IPv4 validation
+  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+  if (ipv4Regex.test(sanitized)) {
+    // Additional IPv4 range validation
+    const parts = sanitized.split('.');
+    if (parts.every(part => parseInt(part) >= 0 && parseInt(part) <= 255)) {
+      console.log(`[validateIpAddress] IP "${sanitized}" validated as IPv4`);
+      return sanitized;
+    }
+  }
+  
+  // Comprehensive IPv6 validation
+  const ipv6Patterns = [
+    // Full form: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+    /^[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7}$/,
+    
+    // Compressed form with :: (most common)
+    // Examples: 2607:f8b0:4864:20::82c, ::1, fe80::1, 2001:db8::1
+    /^[0-9a-fA-F]{0,4}(:[0-9a-fA-F]{0,4})*::([0-9a-fA-F]{0,4}(:[0-9a-fA-F]{1,4})*)?$/,
+    
+    // Leading zeros compressed: ::ffff:192.0.2.1 (IPv4-mapped IPv6)
+    /^::ffff:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/,
+    
+    // Other special cases
+    /^::$/,          // All zeros
+    /^::1$/,         // Loopback
+    /^::[0-9a-fA-F]{1,4}$/,  // Starting with ::
+    /^[0-9a-fA-F]{1,4}::$/   // Ending with ::
+  ];
+  
+  // Check against IPv6 patterns
+  for (let i = 0; i < ipv6Patterns.length; i++) {
+    if (ipv6Patterns[i].test(sanitized)) {
+      console.log(`[validateIpAddress] IP "${sanitized}" matched IPv6 pattern ${i}`);
+      return sanitized;
+    }
+  }
+  
+  // If none of the patterns match, it's invalid
+  console.error(`[validateIpAddress] IP "${sanitized}" failed all validation patterns`);
+  throw new Error(`Invalid IP address format: ${sanitized}`);
 }
 
 function validateNumeric(value: string, min: number = 0, max: number = Number.MAX_SAFE_INTEGER): number {
@@ -123,21 +162,103 @@ function getFirstChildElement(parent: Element, tagName: string): Element | null 
   return elements.length > 0 ? elements[0] : null;
 }
 
+// Sanitize XML content to prevent XXE and other attacks
+function sanitizeXmlContent(xmlContent: string): string {
+  console.log(`[sanitizeXmlContent] Sanitizing XML content`);
+  
+  // Remove XML external entity declarations
+  let sanitized = xmlContent.replace(/<!ENTITY[^>]*>/gi, '');
+  
+  // Remove DOCTYPE declarations with external references
+  sanitized = sanitized.replace(/<!DOCTYPE[^>]*\[[\s\S]*?\]>/gi, '');
+  sanitized = sanitized.replace(/<!DOCTYPE[^>]*>/gi, '');
+  
+  // Remove XML processing instructions except the basic XML declaration
+  sanitized = sanitized.replace(/<\?(?!xml)[^>]*\?>/gi, '');
+  
+  // Remove potentially malicious comments
+  sanitized = sanitized.replace(/<!--[\s\S]*?-->/g, '');
+  
+  // Ensure proper encoding and remove null bytes
+  // eslint-disable-next-line no-control-regex
+  sanitized = sanitized.replace(/\u0000/g, '');
+  
+  console.log(`[sanitizeXmlContent] XML sanitization completed`);
+  return sanitized;
+}
+
+// Validate XML document structure
+function validateXmlStructure(doc: Document): void {
+  console.log(`[validateXmlStructure] Validating document structure`);
+  
+  const feedback = doc.getElementsByTagName('feedback')[0];
+  if (!feedback) {
+    throw new Error('Missing required feedback element');
+  }
+  
+  // Check for required top-level elements
+  const requiredElements = ['report_metadata', 'policy_published'];
+  for (const elementName of requiredElements) {
+    const elements = feedback.getElementsByTagName(elementName);
+    if (elements.length === 0) {
+      throw new Error(`Missing required element: ${elementName}`);
+    }
+    if (elements.length > 1) {
+      console.warn(`[validateXmlStructure] Multiple ${elementName} elements found, using first one`);
+    }
+  }
+  
+  // Check for at least one record
+  const records = feedback.getElementsByTagName('record');
+  if (records.length === 0) {
+    throw new Error('DMARC report contains no records');
+  }
+  
+  // Validate each record has required structure
+  for (let i = 0; i < Math.min(records.length, 10); i++) { // Sample first 10 records for performance
+    const record = records[i];
+    const requiredRecordElements = ['row', 'identifiers', 'auth_results'];
+    
+    for (const elementName of requiredRecordElements) {
+      const elements = record.getElementsByTagName(elementName);
+      if (elements.length === 0) {
+        throw new Error(`Record ${i + 1} missing required element: ${elementName}`);
+      }
+    }
+  }
+  
+  console.log(`[validateXmlStructure] Structure validation completed for ${records.length} records`);
+}
+
 export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
+  console.log(`[parseDmarcXml] Starting XML parsing (${xmlContent.length} characters)`);
+  
   try {
+    // Sanitize XML content to prevent XXE attacks
+    const sanitizedXml = sanitizeXmlContent(xmlContent);
+    console.log(`[parseDmarcXml] XML sanitized successfully`);
+    
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlContent, 'application/xml');
+    const doc = parser.parseFromString(sanitizedXml, 'application/xml');
     
     // Check for XML parsing errors
     const parserError = doc.getElementsByTagName('parsererror')[0];
     if (parserError) {
+      console.error(`[parseDmarcXml] XML parser error:`, parserError.textContent);
       throw new Error(`XML parsing failed: ${parserError.textContent}`);
     }
 
     const feedback = doc.getElementsByTagName('feedback')[0];
     if (!feedback) {
+      console.error(`[parseDmarcXml] Missing feedback element in XML structure`);
       throw new Error('Invalid DMARC report: Missing feedback element');
     }
+    
+    console.log(`[parseDmarcXml] Found feedback element, extracting components`);
+
+    // Validate document structure before parsing
+    validateXmlStructure(doc);
+    console.log(`[parseDmarcXml] XML structure validation passed`);
 
     // Extract report metadata
     const reportMetadata = getFirstChildElement(feedback, 'report_metadata');
@@ -157,10 +278,27 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
       throw new Error('Invalid DMARC report: Missing record data');
     }
 
-    // Parse date range
+    // Parse date range with validation
     const dateRange = getFirstChildElement(reportMetadata, 'date_range');
-    const dateRangeBegin = parseInt(getTextContent(getFirstChildElement(dateRange, 'begin'))) || 0;
-    const dateRangeEnd = parseInt(getTextContent(getFirstChildElement(dateRange, 'end'))) || 0;
+    if (!dateRange) {
+      throw new Error('Missing date_range in report metadata');
+    }
+    
+    const dateRangeBeginElement = getFirstChildElement(dateRange, 'begin');
+    const dateRangeEndElement = getFirstChildElement(dateRange, 'end');
+    
+    if (!dateRangeBeginElement || !dateRangeEndElement) {
+      throw new Error('Missing begin or end date in date_range');
+    }
+    
+    const dateRangeBegin = validateNumeric(getTextContent(dateRangeBeginElement), 0, Date.now() / 1000 + 86400);
+    const dateRangeEnd = validateNumeric(getTextContent(dateRangeEndElement), 0, Date.now() / 1000 + 86400);
+    
+    if (dateRangeBegin >= dateRangeEnd) {
+      throw new Error('Invalid date range: begin date must be before end date');
+    }
+    
+    console.log(`[parseDmarcXml] Date range: ${new Date(dateRangeBegin * 1000).toISOString()} to ${new Date(dateRangeEnd * 1000).toISOString()}`);
 
     const parsedReport: DmarcReport = {
       reportMetadata: {
@@ -180,31 +318,98 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
         sp: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'sp')), 20) || undefined,
         pct: validateNumeric(getTextContent(getFirstChildElement(policyPublished, 'pct')), 0, 100) || 100,
       },
-      records: recordElements.map((recordElement: Element) => {
+      records: recordElements.map((recordElement: Element, index: number) => {
+        console.log(`[parseDmarcXml] Processing record ${index + 1}/${recordElements.length}`);
+        
         const row = getFirstChildElement(recordElement, 'row');
         const identifiers = getFirstChildElement(recordElement, 'identifiers');
         const authResults = getFirstChildElement(recordElement, 'auth_results');
+        
+        if (!row || !identifiers || !authResults) {
+          throw new Error(`Record ${index + 1} missing required elements (row, identifiers, or auth_results)`);
+        }
+        
         const policyEvaluated = getFirstChildElement(row, 'policy_evaluated');
+        if (!policyEvaluated) {
+          throw new Error(`Record ${index + 1} missing policy_evaluated element`);
+        }
 
-        // Parse DKIM results with validation
+        // Validate source IP exists and is valid
+        const sourceIpElement = getFirstChildElement(row, 'source_ip');
+        if (!sourceIpElement) {
+          throw new Error(`Record ${index + 1} missing source_ip`);
+        }
+        const sourceIp = validateIpAddress(getTextContent(sourceIpElement));
+        if (!sourceIp) {
+          throw new Error(`Record ${index + 1} has invalid or empty source_ip`);
+        }
+
+        // Validate count exists and is reasonable
+        const countElement = getFirstChildElement(row, 'count');
+        if (!countElement) {
+          throw new Error(`Record ${index + 1} missing count`);
+        }
+        const count = validateNumeric(getTextContent(countElement), 1, 1000000);
+
+        // Validate identifiers
+        const headerFromElement = getFirstChildElement(identifiers, 'header_from');
+        if (!headerFromElement) {
+          throw new Error(`Record ${index + 1} missing header_from`);
+        }
+        const headerFrom = validateDomain(getTextContent(headerFromElement));
+        if (!headerFrom) {
+          throw new Error(`Record ${index + 1} has invalid or empty header_from domain`);
+        }
+
+        // Parse DKIM results with enhanced validation
         const dkimElements = authResults ? getChildElements(authResults, 'dkim') : [];
-        const dkimResults = dkimElements.map((dkim: Element) => ({
-          domain: validateDomain(getTextContent(getFirstChildElement(dkim, 'domain'))),
-          selector: sanitizeText(getTextContent(getFirstChildElement(dkim, 'selector')), 100) || undefined,
-          result: sanitizeText(getTextContent(getFirstChildElement(dkim, 'result')), 20) || 'fail',
-        }));
+        const dkimResults = dkimElements.map((dkim: Element, dkimIndex: number) => {
+          const domainElement = getFirstChildElement(dkim, 'domain');
+          const resultElement = getFirstChildElement(dkim, 'result');
+          
+          if (!domainElement || !resultElement) {
+            console.warn(`[parseDmarcXml] Record ${index + 1} DKIM ${dkimIndex + 1} missing domain or result, skipping`);
+            return null;
+          }
 
-        // Parse SPF results with validation
+          try {
+            return {
+              domain: validateDomain(getTextContent(domainElement)),
+              selector: sanitizeText(getTextContent(getFirstChildElement(dkim, 'selector')), 100) || undefined,
+              result: sanitizeText(getTextContent(resultElement), 20) || 'fail',
+            };
+          } catch (error) {
+            console.warn(`[parseDmarcXml] Record ${index + 1} DKIM ${dkimIndex + 1} validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+          }
+        }).filter(Boolean); // Remove null entries
+
+        // Parse SPF results with enhanced validation
         const spfElements = authResults ? getChildElements(authResults, 'spf') : [];
-        const spfResults = spfElements.map((spf: Element) => ({
-          domain: validateDomain(getTextContent(getFirstChildElement(spf, 'domain'))),
-          result: sanitizeText(getTextContent(getFirstChildElement(spf, 'result')), 20) || 'fail',
-        }));
+        const spfResults = spfElements.map((spf: Element, spfIndex: number) => {
+          const domainElement = getFirstChildElement(spf, 'domain');
+          const resultElement = getFirstChildElement(spf, 'result');
+          
+          if (!domainElement || !resultElement) {
+            console.warn(`[parseDmarcXml] Record ${index + 1} SPF ${spfIndex + 1} missing domain or result, skipping`);
+            return null;
+          }
+
+          try {
+            return {
+              domain: validateDomain(getTextContent(domainElement)),
+              result: sanitizeText(getTextContent(resultElement), 20) || 'fail',
+            };
+          } catch (error) {
+            console.warn(`[parseDmarcXml] Record ${index + 1} SPF ${spfIndex + 1} validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+          }
+        }).filter(Boolean); // Remove null entries
 
         return {
           row: {
-            sourceIp: validateIpAddress(getTextContent(getFirstChildElement(row, 'source_ip'))),
-            count: validateNumeric(getTextContent(getFirstChildElement(row, 'count')), 1, 1000000),
+            sourceIp,
+            count,
             policyEvaluated: {
               disposition: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'disposition')), 20) || 'none',
               dkim: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'dkim')), 20) || 'fail',
@@ -212,7 +417,7 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
             },
           },
           identifiers: {
-            headerFrom: validateDomain(getTextContent(getFirstChildElement(identifiers, 'header_from'))),
+            headerFrom,
           },
           authResults: {
             dkim: dkimResults.length > 0 ? dkimResults : undefined,
@@ -222,9 +427,13 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
       }),
     };
 
+    console.log(`[parseDmarcXml] Successfully parsed report for ${parsedReport.policyPublished.domain} with ${parsedReport.records.length} records`);
     return parsedReport;
+    
   } catch (error) {
-    throw new Error(`DMARC report parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error(`[parseDmarcXml] Parsing failed:`, error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown parsing error';
+    throw new Error(`DMARC report parsing failed: ${errorMessage}`);
   }
 }
 
