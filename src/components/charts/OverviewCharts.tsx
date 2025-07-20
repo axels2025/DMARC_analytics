@@ -18,11 +18,13 @@ import {
 } from "recharts";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useDmarcData } from "@/hooks/useDmarcData";
 import { Loader } from "lucide-react";
 import { detectIPProviders } from "@/utils/ipProviderDetection";
 
 const OverviewCharts = () => {
   const { user } = useAuth();
+  const { metrics } = useDmarcData();
   const [authStatusData, setAuthStatusData] = useState<any[]>([]);
   const [providerData, setProviderData] = useState<any[]>([]);
   const [trendData, setTrendData] = useState<any[]>([]);
@@ -35,7 +37,7 @@ const OverviewCharts = () => {
       setLoading(true);
       try {
         // Fetch authentication status data
-        const { data: records } = await supabase
+        let recordsQuery = supabase
           .from("dmarc_records")
           .select(`
             count,
@@ -46,6 +48,25 @@ const OverviewCharts = () => {
             dmarc_reports!inner(user_id)
           `)
           .eq("dmarc_reports.user_id", user.id);
+
+        // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
+        try {
+          recordsQuery = recordsQuery
+            .select(`
+              count,
+              dkim_result,
+              spf_result,
+              source_ip,
+              disposition,
+              dmarc_reports!inner(user_id, include_in_dashboard)
+            `)
+            .eq("dmarc_reports.user_id", user.id)
+            .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
+        } catch (filterError) {
+          console.warn("include_in_dashboard column not accessible in charts, showing all data:", filterError);
+        }
+
+        const { data: records } = await recordsQuery;
 
         if (records && records.length > 0) {
           // Calculate authentication status
@@ -93,12 +114,21 @@ const OverviewCharts = () => {
         }
 
         // Fetch trend data from reports
-        const { data: reports } = await supabase
+        let reportsQuery = supabase
           .from("dmarc_reports")
           .select("*")
           .eq("user_id", user.id)
           .order("date_range_begin", { ascending: true })
           .limit(10);
+
+        // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
+        try {
+          reportsQuery = reportsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
+        } catch (filterError) {
+          console.warn("include_in_dashboard column not accessible for trend data, showing all data:", filterError);
+        }
+
+        const { data: reports } = await reportsQuery;
 
         if (reports && reports.length > 0) {
           const trendDataPromises = reports.map(async (report) => {
@@ -131,7 +161,7 @@ const OverviewCharts = () => {
     };
 
     fetchChartData();
-  }, [user]);
+  }, [user, metrics?.lastUpdated]);
 
   if (loading) {
     return (

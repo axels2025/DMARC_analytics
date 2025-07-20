@@ -94,25 +94,42 @@ export const useDmarcData = () => {
     if (!user) return;
 
     try {
-      // Get total reports (only those included in dashboard)
-      const { count: totalReports } = await supabase
+      // Try to get total reports with include_in_dashboard filter first
+      let totalReportsQuery = supabase
         .from("dmarc_reports")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
+        .eq("user_id", user.id);
 
-      // Get records with counts (only from reports included in dashboard)
-      const { data: records } = await supabase
+      let recordsQuery = supabase
         .from("dmarc_records")
         .select(`
           count,
           dkim_result,
           spf_result,
           source_ip,
-          dmarc_reports!inner(user_id, include_in_dashboard)
+          dmarc_reports!inner(user_id)
         `)
-        .eq("dmarc_reports.user_id", user.id)
-        .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
+        .eq("dmarc_reports.user_id", user.id);
+
+      // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
+      try {
+        totalReportsQuery = totalReportsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
+        recordsQuery = recordsQuery
+          .select(`
+            count,
+            dkim_result,
+            spf_result,
+            source_ip,
+            dmarc_reports!inner(user_id, include_in_dashboard)
+          `)
+          .eq("dmarc_reports.user_id", user.id)
+          .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
+      } catch (filterError) {
+        console.warn("include_in_dashboard column not accessible, showing all data:", filterError);
+      }
+
+      const { count: totalReports } = await totalReportsQuery;
+      const { data: records } = await recordsQuery;
 
       if (records) {
         const totalEmails = records.reduce((sum, record) => sum + record.count, 0);
@@ -125,12 +142,19 @@ export const useDmarcData = () => {
         
         const successRate = totalEmails > 0 ? (successfulEmails / totalEmails) * 100 : 0;
 
-        // Get unique domains (only from reports included in dashboard)
-        const { data: domains } = await supabase
+        // Get unique domains (try with include_in_dashboard filter, fallback to all)
+        let domainsQuery = supabase
           .from("dmarc_reports")
           .select("domain")
-          .eq("user_id", user.id)
-          .or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
+          .eq("user_id", user.id);
+        
+        try {
+          domainsQuery = domainsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
+        } catch (filterError) {
+          console.warn("include_in_dashboard column not accessible for domains query, showing all data:", filterError);
+        }
+
+        const { data: domains } = await domainsQuery;
         
         const activeDomains = new Set(domains?.map(d => d.domain)).size;
 

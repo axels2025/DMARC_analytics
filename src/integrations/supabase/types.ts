@@ -103,6 +103,7 @@ export type Database = {
           date_range_end: number
           domain: string
           id: string
+          include_in_dashboard: boolean
           org_email: string | null
           org_name: string
           policy_dkim: string
@@ -122,6 +123,7 @@ export type Database = {
           date_range_end: number
           domain: string
           id?: string
+          include_in_dashboard?: boolean
           org_email?: string | null
           org_name: string
           policy_dkim: string
@@ -141,6 +143,7 @@ export type Database = {
           date_range_end?: number
           domain?: string
           id?: string
+          include_in_dashboard?: boolean
           org_email?: string | null
           org_name?: string
           policy_dkim?: string
