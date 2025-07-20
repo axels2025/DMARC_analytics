@@ -289,8 +289,7 @@ const Upload = () => {
     accept: {
       'text/xml': ['.xml'],
       'application/xml': ['.xml'],
-      // Also accept files with no detected MIME type but .xml extension
-      '': ['.xml']
+      'text/plain': ['.xml'] // Accept text/plain MIME type for .xml files
     },
     maxFiles: 1,
     maxSize: 50 * 1024 * 1024, // 50MB limit

@@ -94,79 +94,61 @@ export const useDmarcData = () => {
     if (!user) return;
 
     try {
-      // Try to get total reports with include_in_dashboard filter first
-      let totalReportsQuery = supabase
+      // Get total reports - fetch all first, then filter client-side for now
+      const { data: allReports } = await supabase
         .from("dmarc_reports")
-        .select("*", { count: "exact", head: true })
+        .select("*")
         .eq("user_id", user.id);
 
-      let recordsQuery = supabase
-        .from("dmarc_records")
-        .select(`
-          count,
-          dkim_result,
-          spf_result,
-          source_ip,
-          dmarc_reports!inner(user_id)
-        `)
-        .eq("dmarc_reports.user_id", user.id);
+      // Filter reports based on include_in_dashboard (client-side filtering)
+      const includedReports = allReports?.filter(report => 
+        report.include_in_dashboard === null || report.include_in_dashboard === true
+      ) || [];
 
-      // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
-      try {
-        totalReportsQuery = totalReportsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
-        recordsQuery = recordsQuery
+      const totalReports = includedReports.length;
+
+      // Get records from included reports only
+      const includedReportIds = includedReports.map(r => r.id);
+      
+      let records: any[] = [];
+      if (includedReportIds.length > 0) {
+        const { data: recordsData } = await supabase
+          .from("dmarc_records")
           .select(`
             count,
             dkim_result,
             spf_result,
             source_ip,
-            dmarc_reports!inner(user_id, include_in_dashboard)
+            report_id
           `)
-          .eq("dmarc_reports.user_id", user.id)
-          .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
-      } catch (filterError) {
-        console.warn("include_in_dashboard column not accessible, showing all data:", filterError);
+          .in("report_id", includedReportIds);
+        
+        records = recordsData || [];
       }
 
-      const { count: totalReports } = await totalReportsQuery;
-      const { data: records } = await recordsQuery;
+      const totalEmails = records.reduce((sum, record) => sum + record.count, 0);
+      const uniqueIPs = new Set(records.map(r => r.source_ip)).size;
+      
+      // Calculate success rate (both DKIM and SPF pass)
+      const successfulEmails = records
+        .filter(r => r.dkim_result === "pass" && r.spf_result === "pass")
+        .reduce((sum, record) => sum + record.count, 0);
+      
+      const successRate = totalEmails > 0 ? (successfulEmails / totalEmails) * 100 : 0;
 
-      if (records) {
-        const totalEmails = records.reduce((sum, record) => sum + record.count, 0);
-        const uniqueIPs = new Set(records.map(r => r.source_ip)).size;
-        
-        // Calculate success rate (both DKIM and SPF pass)
-        const successfulEmails = records
-          .filter(r => r.dkim_result === "pass" && r.spf_result === "pass")
-          .reduce((sum, record) => sum + record.count, 0);
-        
-        const successRate = totalEmails > 0 ? (successfulEmails / totalEmails) * 100 : 0;
+      // Get unique domains from included reports
+      const domains = includedReports.map(r => ({ domain: r.domain }));
+      
+      const activeDomains = new Set(domains?.map(d => d.domain)).size;
 
-        // Get unique domains (try with include_in_dashboard filter, fallback to all)
-        let domainsQuery = supabase
-          .from("dmarc_reports")
-          .select("domain")
-          .eq("user_id", user.id);
-        
-        try {
-          domainsQuery = domainsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
-        } catch (filterError) {
-          console.warn("include_in_dashboard column not accessible for domains query, showing all data:", filterError);
-        }
-
-        const { data: domains } = await domainsQuery;
-        
-        const activeDomains = new Set(domains?.map(d => d.domain)).size;
-
-        setMetrics({
-          totalReports: totalReports || 0,
-          totalEmails,
-          successRate: Math.round(successRate * 10) / 10,
-          uniqueIPs,
-          activeDomains,
-          lastUpdated: new Date().toISOString()
-        });
-      }
+      setMetrics({
+        totalReports: totalReports || 0,
+        totalEmails,
+        successRate: Math.round(successRate * 10) / 10,
+        uniqueIPs,
+        activeDomains,
+        lastUpdated: new Date().toISOString()
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch metrics");
     }

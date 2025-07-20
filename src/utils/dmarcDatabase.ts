@@ -86,7 +86,12 @@ async function saveDmarcReportManual(
       const record = report.records[i];
       console.log(`[saveDmarcReportManual] Processing record ${i + 1}/${report.records.length} from IP ${record.row.sourceIp}`);
       
-      const recordPromise = saveRecordWithAuthResults(recordId, record, i);
+      // Validate that reportId is properly set before processing records
+      if (!reportId) {
+        throw new Error(`Report ID is null when processing record ${i}. This should not happen.`);
+      }
+      
+      const recordPromise = saveRecordWithAuthResults(reportId, record, i);
       recordPromises.push(recordPromise);
     }
 

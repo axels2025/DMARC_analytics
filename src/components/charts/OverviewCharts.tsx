@@ -36,37 +36,37 @@ const OverviewCharts = () => {
       
       setLoading(true);
       try {
-        // Fetch authentication status data
-        let recordsQuery = supabase
-          .from("dmarc_records")
-          .select(`
-            count,
-            dkim_result,
-            spf_result,
-            source_ip,
-            disposition,
-            dmarc_reports!inner(user_id)
-          `)
-          .eq("dmarc_reports.user_id", user.id);
+        // Fetch authentication status data - use client-side filtering approach
+        // First get all reports for the user to filter by include_in_dashboard
+        const { data: allReports } = await supabase
+          .from("dmarc_reports")
+          .select("*")
+          .eq("user_id", user.id);
 
-        // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
-        try {
-          recordsQuery = recordsQuery
+        // Filter reports based on include_in_dashboard (client-side filtering)
+        const includedReports = allReports?.filter(report => 
+          report.include_in_dashboard === null || report.include_in_dashboard === true
+        ) || [];
+
+        // Get records from included reports only
+        const includedReportIds = includedReports.map(r => r.id);
+        
+        let records: any[] = [];
+        if (includedReportIds.length > 0) {
+          const { data: recordsData } = await supabase
+            .from("dmarc_records")
             .select(`
               count,
               dkim_result,
               spf_result,
               source_ip,
               disposition,
-              dmarc_reports!inner(user_id, include_in_dashboard)
+              report_id
             `)
-            .eq("dmarc_reports.user_id", user.id)
-            .or("dmarc_reports.include_in_dashboard.is.null,dmarc_reports.include_in_dashboard.eq.true");
-        } catch (filterError) {
-          console.warn("include_in_dashboard column not accessible in charts, showing all data:", filterError);
+            .in("report_id", includedReportIds);
+          
+          records = recordsData || [];
         }
-
-        const { data: records } = await recordsQuery;
 
         if (records && records.length > 0) {
           // Calculate authentication status
@@ -113,25 +113,13 @@ const OverviewCharts = () => {
           setProviderData(topProviders);
         }
 
-        // Fetch trend data from reports
-        let reportsQuery = supabase
-          .from("dmarc_reports")
-          .select("*")
-          .eq("user_id", user.id)
-          .order("date_range_begin", { ascending: true })
-          .limit(10);
+        // Fetch trend data from included reports only
+        const trendReports = includedReports
+          .sort((a, b) => a.date_range_begin - b.date_range_begin)
+          .slice(0, 10);
 
-        // Try to apply include_in_dashboard filter, fallback to all data if column doesn't exist
-        try {
-          reportsQuery = reportsQuery.or("include_in_dashboard.is.null,include_in_dashboard.eq.true");
-        } catch (filterError) {
-          console.warn("include_in_dashboard column not accessible for trend data, showing all data:", filterError);
-        }
-
-        const { data: reports } = await reportsQuery;
-
-        if (reports && reports.length > 0) {
-          const trendDataPromises = reports.map(async (report) => {
+        if (trendReports && trendReports.length > 0) {
+          const trendDataPromises = trendReports.map(async (report) => {
             const { data: reportRecords } = await supabase
               .from("dmarc_records")
               .select("count, dkim_result, spf_result")
