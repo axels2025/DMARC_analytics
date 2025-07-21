@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,29 +18,50 @@ const Auth = () => {
   const [error, setError] = useState("");
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signIn, signUp, user } = useAuth();
+  const { signIn, signUp, user, error: authError, clearError } = useAuth();
 
   useEffect(() => {
+    console.log('[Auth] Component mounted, checking user state');
     // Check if user is already logged in
     if (user) {
+      console.log('[Auth] User is authenticated, redirecting to dashboard');
       navigate("/dashboard");
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    // Clear local error when auth error changes
+    if (authError) {
+      setError(authError);
+    }
+  }, [authError]);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
+    clearError();
 
-    const result = await signUp(email, password);
+    console.log('[Auth] Attempting sign up');
 
-    if (result.error) {
-      setError(result.error.message);
-    } else {
-      toast({
-        title: "Check your email",
-        description: "A confirmation link has been sent to your email address.",
-      });
+    try {
+      const result = await signUp(email, password);
+
+      if (result.error) {
+        console.error('[Auth] Sign up error:', result.error);
+        setError(result.error.message);
+      } else {
+        console.log('[Auth] Sign up successful');
+        toast({
+          title: "Check your email",
+          description: "A confirmation link has been sent to your email address.",
+        });
+        setEmail("");
+        setPassword("");
+      }
+    } catch (err) {
+      console.error('[Auth] Sign up exception:', err);
+      setError('An unexpected error occurred during sign up');
     }
     
     setLoading(false);
@@ -49,13 +71,23 @@ const Auth = () => {
     e.preventDefault();
     setLoading(true);
     setError("");
+    clearError();
 
-    const result = await signIn(email, password);
+    console.log('[Auth] Attempting sign in');
 
-    if (result.error) {
-      setError(result.error.message);
-    } else {
-      navigate("/dashboard");
+    try {
+      const result = await signIn(email, password);
+
+      if (result.error) {
+        console.error('[Auth] Sign in error:', result.error);
+        setError(result.error.message);
+      } else {
+        console.log('[Auth] Sign in successful, redirecting to dashboard');
+        navigate("/dashboard");
+      }
+    } catch (err) {
+      console.error('[Auth] Sign in exception:', err);
+      setError('An unexpected error occurred during sign in');
     }
     
     setLoading(false);
@@ -151,12 +183,12 @@ const Auth = () => {
                       <Input
                         id="signup-password"
                         type="password"
-                        placeholder="Create a password"
+                        placeholder="Create a password (min 8 characters)"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="pl-10"
                         required
-                        minLength={6}
+                        minLength={8}
                       />
                     </div>
                   </div>
