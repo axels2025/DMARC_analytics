@@ -11,8 +11,101 @@ interface IPMapping {
   [key: string]: string;
 }
 
-// Cache for IP provider lookups
-const providerCache = new Map<string, string>();
+// Enhanced cache for IP provider lookups with persistence
+interface CacheEntry {
+  provider: string;
+  hostname?: string;
+  timestamp: number;
+  source: 'ip_range' | 'dns_lookup';
+}
+
+const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_KEY = 'dmarc_ip_provider_cache';
+
+class IPProviderCache {
+  private cache = new Map<string, CacheEntry>();
+  private loadPromise: Promise<void> | null = null;
+
+  constructor() {
+    this.loadFromStorage();
+  }
+
+  private async loadFromStorage(): Promise<void> {
+    if (this.loadPromise) return this.loadPromise;
+    
+    this.loadPromise = (async () => {
+      try {
+        const stored = localStorage.getItem(CACHE_KEY);
+        if (stored) {
+          const data = JSON.parse(stored);
+          const now = Date.now();
+          
+          for (const [ip, entry] of Object.entries(data)) {
+            const cacheEntry = entry as CacheEntry;
+            if (now - cacheEntry.timestamp < CACHE_EXPIRY_MS) {
+              this.cache.set(ip, cacheEntry);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load IP provider cache from storage:', error);
+      }
+    })();
+    
+    return this.loadPromise;
+  }
+
+  private saveToStorage(): void {
+    try {
+      const data: Record<string, CacheEntry> = {};
+      for (const [ip, entry] of this.cache.entries()) {
+        data[ip] = entry;
+      }
+      localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+    } catch (error) {
+      console.warn('Failed to save IP provider cache to storage:', error);
+    }
+  }
+
+  async get(ip: string): Promise<CacheEntry | null> {
+    await this.loadFromStorage();
+    
+    const entry = this.cache.get(ip);
+    if (!entry) return null;
+    
+    const now = Date.now();
+    if (now - entry.timestamp > CACHE_EXPIRY_MS) {
+      this.cache.delete(ip);
+      this.saveToStorage();
+      return null;
+    }
+    
+    return entry;
+  }
+
+  set(ip: string, provider: string, hostname?: string, source: 'ip_range' | 'dns_lookup' = 'ip_range'): void {
+    const entry: CacheEntry = {
+      provider,
+      hostname,
+      timestamp: Date.now(),
+      source
+    };
+    
+    this.cache.set(ip, entry);
+    this.saveToStorage();
+  }
+
+  clear(): void {
+    this.cache.clear();
+    localStorage.removeItem(CACHE_KEY);
+  }
+
+  size(): number {
+    return this.cache.size;
+  }
+}
+
+const providerCache = new IPProviderCache();
 
 // Common email provider IP ranges (IPv4)
 const IP_RANGES: IPRange[] = [
@@ -133,43 +226,141 @@ function isIPv4(ip: string): boolean {
 }
 
 /**
- * Attempts to get provider name from reverse DNS lookup
+ * Interface for DNS lookup response
  */
-async function getProviderFromReverseDNS(ip: string): Promise<string | null> {
+interface DNSLookupResponse {
+  success: boolean;
+  hostname?: string;
+  provider?: string;
+  error?: string;
+}
+
+/**
+ * Attempts to get provider name from reverse DNS lookup via Supabase Edge Function
+ */
+async function getProviderFromReverseDNS(ip: string): Promise<{ provider: string | null; hostname: string | null }> {
   try {
-    // Note: In browser environment, we can't do actual reverse DNS lookups
-    // This would need to be done server-side or through a service
-    // For now, we'll return null and rely on IP range detection
-    return null;
+    // Get Supabase URL from environment or use default
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    if (!supabaseUrl) {
+      console.warn('Supabase URL not configured, skipping DNS lookup');
+      return { provider: null, hostname: null };
+    }
+
+    const dnsLookupUrl = `${supabaseUrl}/functions/v1/dns-lookup`;
+    
+    const response = await fetch(dnsLookupUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ ip }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 429) {
+        console.warn('DNS lookup rate limit exceeded');
+        return { provider: null, hostname: null };
+      }
+      throw new Error(`DNS lookup failed: ${response.status}`);
+    }
+
+    const data: DNSLookupResponse = await response.json();
+    
+    if (!data.success) {
+      console.warn(`DNS lookup failed for ${ip}: ${data.error}`);
+      return { provider: null, hostname: null };
+    }
+
+    return {
+      provider: data.provider || null,
+      hostname: data.hostname || null,
+    };
+
   } catch (error) {
     console.warn(`Reverse DNS lookup failed for ${ip}:`, error);
-    return null;
+    return { provider: null, hostname: null };
   }
 }
 
 /**
- * Extracts provider name from hostname
+ * Extracts provider name from hostname with enhanced pattern matching
  */
 function extractProviderFromHostname(hostname: string): string | null {
   const lowerHost = hostname.toLowerCase();
   
-  // Common provider patterns in hostnames
+  // More comprehensive provider patterns
   const patterns = [
-    { pattern: /google|gmail|googlemail/, provider: "Google (Gmail)" },
-    { pattern: /outlook|hotmail|live|microsoft|office365/, provider: "Microsoft (Outlook)" },
-    { pattern: /yahoo|ymail/, provider: "Yahoo Mail" },
-    { pattern: /amazon|ses/, provider: "Amazon SES" },
-    { pattern: /sendgrid/, provider: "SendGrid" },
-    { pattern: /mailgun/, provider: "Mailgun" },
-    { pattern: /mailchimp/, provider: "Mailchimp" },
-    { pattern: /constant.*contact/, provider: "Constant Contact" },
-    { pattern: /salesforce|pardot/, provider: "Salesforce" },
-    { pattern: /zendesk/, provider: "Zendesk" },
+    // Cloud providers
+    { pattern: /amazonaws\.com|aws\.amazon\.com|ec2.*\.amazonaws\.com/, provider: "Amazon AWS" },
+    { pattern: /googleusercontent\.com|google\.com|googleapis\.com|gcp\./, provider: "Google Cloud" },
+    { pattern: /azure.*\.microsoft\.com|outlook\.com|hotmail\.com|live\.com/, provider: "Microsoft Azure/Outlook" },
+    { pattern: /digitalocean\.com/, provider: "DigitalOcean" },
+    { pattern: /linode\.com/, provider: "Linode" },
+    { pattern: /vultr\.com/, provider: "Vultr" },
+    { pattern: /hetzner\.com|hetzner\.de/, provider: "Hetzner" },
+    
+    // Email service providers
+    { pattern: /sendgrid\.net|sendgrid\.com/, provider: "SendGrid" },
+    { pattern: /mailgun\.org|mailgun\.com/, provider: "Mailgun" },
+    { pattern: /mandrill\.com|mandrillapp\.com/, provider: "Mailchimp Mandrill" },
+    { pattern: /mailchimp\.com/, provider: "Mailchimp" },
+    { pattern: /constantcontact\.com/, provider: "Constant Contact" },
+    { pattern: /salesforce\.com|pardot\.com|marketingcloud\.com/, provider: "Salesforce Marketing Cloud" },
+    { pattern: /zendesk\.com/, provider: "Zendesk" },
+    { pattern: /hubspot\.com/, provider: "HubSpot" },
+    { pattern: /campaignmonitor\.com/, provider: "Campaign Monitor" },
+    { pattern: /aweber\.com/, provider: "AWeber" },
+    { pattern: /getresponse\.com/, provider: "GetResponse" },
+    { pattern: /mailerlite\.com/, provider: "MailerLite" },
+    { pattern: /convertkit\.com/, provider: "ConvertKit" },
+    
+    // Traditional email providers
+    { pattern: /gmail\.com|googlemail\.com/, provider: "Google (Gmail)" },
+    { pattern: /yahoo\.com|ymail\.com/, provider: "Yahoo Mail" },
+    { pattern: /aol\.com/, provider: "AOL Mail" },
+    { pattern: /protonmail\.com|proton\.me/, provider: "ProtonMail" },
+    { pattern: /tutanota\.com/, provider: "Tutanota" },
+    
+    // CDN and hosting providers
+    { pattern: /cloudflare\.com|cf-.*\.net/, provider: "Cloudflare" },
+    { pattern: /fastly\.com/, provider: "Fastly" },
+    { pattern: /cloudfront\.net/, provider: "Amazon CloudFront" },
+    { pattern: /akamai.*\.net/, provider: "Akamai" },
+    { pattern: /netlify\.com/, provider: "Netlify" },
+    { pattern: /vercel\.com/, provider: "Vercel" },
+    
+    // ISPs and general hosting
+    { pattern: /comcast\.net/, provider: "Comcast" },
+    { pattern: /verizon\.net/, provider: "Verizon" },
+    { pattern: /att\.net/, provider: "AT&T" },
+    { pattern: /charter\.com|spectrum\.com/, provider: "Charter/Spectrum" },
+    { pattern: /cox\.net/, provider: "Cox Communications" },
+    { pattern: /godaddy\.com/, provider: "GoDaddy" },
+    { pattern: /bluehost\.com/, provider: "Bluehost" },
+    { pattern: /hostgator\.com/, provider: "HostGator" },
+    { pattern: /siteground\.com/, provider: "SiteGround" },
   ];
   
   for (const { pattern, provider } of patterns) {
     if (pattern.test(lowerHost)) {
       return provider;
+    }
+  }
+  
+  // Try to extract provider from domain structure
+  const parts = lowerHost.split('.');
+  if (parts.length >= 2) {
+    const domain = parts[parts.length - 2];
+    
+    // Common hosting/service patterns
+    if (domain.includes('mail') || domain.includes('smtp') || domain.includes('mx')) {
+      return `${domain.charAt(0).toUpperCase() + domain.slice(1)} Email Service`;
+    }
+    
+    if (domain.includes('cloud') || domain.includes('server') || domain.includes('host')) {
+      return `${domain.charAt(0).toUpperCase() + domain.slice(1)} Hosting`;
     }
   }
   
@@ -181,11 +372,14 @@ function extractProviderFromHostname(hostname: string): string | null {
  */
 export async function detectIPProvider(ip: string): Promise<string> {
   // Check cache first
-  if (providerCache.has(ip)) {
-    return providerCache.get(ip)!;
+  const cachedEntry = await providerCache.get(ip);
+  if (cachedEntry) {
+    return cachedEntry.provider;
   }
   
   let provider: string | null = null;
+  let hostname: string | null = null;
+  let source: 'ip_range' | 'dns_lookup' = 'ip_range';
   
   try {
     // Validate IP address format
@@ -201,7 +395,15 @@ export async function detectIPProvider(ip: string): Promise<string> {
     
     // If no provider found through IP ranges, try reverse DNS
     if (!provider) {
-      provider = await getProviderFromReverseDNS(ip);
+      const dnsResult = await getProviderFromReverseDNS(ip);
+      provider = dnsResult.provider;
+      hostname = dnsResult.hostname;
+      source = 'dns_lookup';
+      
+      // If DNS lookup provided hostname but no provider, try to extract provider
+      if (!provider && hostname) {
+        provider = extractProviderFromHostname(hostname);
+      }
     }
     
     // Final fallback
@@ -215,7 +417,7 @@ export async function detectIPProvider(ip: string): Promise<string> {
   }
   
   // Cache the result
-  providerCache.set(ip, provider);
+  providerCache.set(ip, provider, hostname || undefined, source);
   
   return provider;
 }
@@ -248,5 +450,36 @@ export function clearProviderCache(): void {
  * Get cache size for monitoring
  */
 export function getProviderCacheSize(): number {
-  return providerCache.size;
+  return providerCache.size();
+}
+
+/**
+ * Get cache statistics for debugging and monitoring
+ */
+export async function getProviderCacheStats(): Promise<{
+  size: number;
+  ipRangeEntries: number;
+  dnsLookupEntries: number;
+  oldestEntry?: number;
+  newestEntry?: number;
+}> {
+  await providerCache.loadFromStorage();
+  
+  // Access private cache for stats (not ideal but needed for monitoring)
+  const cacheInstance = providerCache as unknown as { cache: Map<string, CacheEntry> };
+  const entries = Array.from(cacheInstance.cache.values());
+  const ipRangeEntries = entries.filter(e => e.source === 'ip_range').length;
+  const dnsLookupEntries = entries.filter(e => e.source === 'dns_lookup').length;
+  
+  const timestamps = entries.map(e => e.timestamp);
+  const oldestEntry = timestamps.length > 0 ? Math.min(...timestamps) : undefined;
+  const newestEntry = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
+  
+  return {
+    size: entries.length,
+    ipRangeEntries,
+    dnsLookupEntries,
+    oldestEntry,
+    newestEntry,
+  };
 }
