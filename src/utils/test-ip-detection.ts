@@ -69,6 +69,43 @@ export async function testSingleIP(ip: string) {
   return provider;
 }
 
+// Function to manually test DNS lookup
+export async function testDNSLookupManual(ip: string) {
+  console.log(`🔍 Manual DNS Lookup Test for IP: ${ip}`);
+  
+  const supabaseUrl = "https://epzcwplbouhbucbmhcur.supabase.co";
+  const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU";
+  
+  const dnsLookupUrl = `${supabaseUrl}/functions/v1/dns-lookup`;
+  console.log(`🔗 Calling: ${dnsLookupUrl}`);
+  
+  try {
+    const response = await fetch(dnsLookupUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ ip }),
+    });
+    
+    console.log(`📡 Response Status: ${response.status} ${response.statusText}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Error Response: ${errorText}`);
+      return;
+    }
+    
+    const data = await response.json();
+    console.log(`📋 DNS Lookup Response:`, data);
+    
+    return data;
+  } catch (error) {
+    console.error(`💥 DNS Lookup Error:`, error);
+  }
+}
+
 // Make functions available globally for browser console testing
 if (typeof window !== 'undefined') {
   const globalWindow = window as unknown as Record<string, unknown>;
@@ -77,5 +114,8 @@ if (typeof window !== 'undefined') {
   globalWindow.detectIPProvider = detectIPProvider;
   globalWindow.getProviderCacheStats = getProviderCacheStats;
   globalWindow.testDNSLookup = testDNSLookup;
+  globalWindow.testDNSLookupManual = testDNSLookupManual;
   globalWindow.clearProviderCache = clearProviderCache;
+  
+  console.log('🔧 DNS Testing functions loaded! Try: testDNSLookupManual("13.236.255.231")');
 }

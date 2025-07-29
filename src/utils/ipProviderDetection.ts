@@ -247,6 +247,7 @@ async function getProviderFromReverseDNS(ip: string): Promise<{ provider: string
     const dnsLookupUrl = `${supabaseUrl}/functions/v1/dns-lookup`;
     
     console.log(`🔍 DNS Lookup: Attempting reverse DNS for IP ${ip}`);
+    console.log(`🔗 DNS Lookup URL: ${dnsLookupUrl}`);
     
     const response = await fetch(dnsLookupUrl, {
       method: 'POST',
