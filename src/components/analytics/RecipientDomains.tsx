@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { Mail, TrendingUp, Shield, AlertTriangle } from "lucide-react";
+import { Mail, TrendingUp, Shield, AlertTriangle, RefreshCw, Info } from "lucide-react";
+import { migrateEnvelopeToData, checkMigrationNeeded } from "@/utils/migrateEnvelopeTo";
+import { toast } from "@/hooks/use-toast";
 
 interface RecipientDomainData {
   domain: string;
@@ -18,12 +21,53 @@ const RecipientDomains = () => {
   const { user } = useAuth();
   const [domainData, setDomainData] = useState<RecipientDomainData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [migrationNeeded, setMigrationNeeded] = useState(false);
+  const [migrating, setMigrating] = useState(false);
 
   useEffect(() => {
     if (user) {
       fetchRecipientDomains();
+      checkForMigration();
     }
   }, [user]);
+
+  const checkForMigration = async () => {
+    if (!user) return;
+    try {
+      const needsMigration = await checkMigrationNeeded(user.id);
+      setMigrationNeeded(needsMigration);
+    } catch (error) {
+      console.error('Error checking migration status:', error);
+    }
+  };
+
+  const handleMigration = async () => {
+    if (!user) return;
+    
+    setMigrating(true);
+    try {
+      const result = await migrateEnvelopeToData(user.id);
+      
+      toast({
+        title: "Migration Complete",
+        description: result.message,
+        variant: result.errors > 0 ? "destructive" : "default"
+      });
+
+      if (result.migrated > 0) {
+        setMigrationNeeded(false);
+        await fetchRecipientDomains(); // Refresh data
+      }
+    } catch (error) {
+      toast({
+        title: "Migration Failed",
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive"
+      });
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const fetchRecipientDomains = async () => {
     try {
@@ -145,6 +189,39 @@ const RecipientDomains = () => {
 
   return (
     <div className="space-y-6">
+      {/* Migration Notice */}
+      {migrationNeeded && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="p-6">
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 text-blue-600 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="font-medium text-blue-800 mb-2">Data Migration Available</h4>
+                <p className="text-sm text-blue-700 mb-3">
+                  Your existing DMARC data doesn't include recipient domain information. 
+                  Run a migration to extract recipient domains from your uploaded reports for more accurate analysis.
+                </p>
+                <Button 
+                  onClick={handleMigration}
+                  disabled={migrating}
+                  size="sm"
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {migrating ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Migrating...
+                    </>
+                  ) : (
+                    'Migrate Data'
+                  )}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>

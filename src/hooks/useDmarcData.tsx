@@ -32,6 +32,7 @@ export interface DmarcRecord {
   dkim_result: string;
   spf_result: string;
   header_from: string;
+  envelope_to?: string | null;
   created_at: string;
 }
 
@@ -213,7 +214,7 @@ export const useDmarcData = () => {
         .select("*")
         .eq("id", reportId)
         .eq("user_id", user.id)
-        .single();
+        .maybeSingle();
 
       if (report) {
         // Get associated records
