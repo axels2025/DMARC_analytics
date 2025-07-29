@@ -65,16 +65,33 @@ Before you begin, ensure you have the following installed:
 
 3. **Environment Configuration**
    
-   Create a `.env.local` file in the root directory:
+   **🔧 For Lovable Platform (Original Development):**
+   
+   This project was built on Lovable, where Supabase credentials are hardcoded in the client configuration. This is the recommended approach for Lovable projects:
+   - Public keys (URL and anon key) are safely included in client code
+   - Server-side secrets are managed through Supabase's secret management system
+   - No `.env` files are needed or supported on Lovable
+   
+   **⚙️ For Self-Hosting/Other Platforms:**
+   
+   If you're deploying this code outside of Lovable, create a `.env.local` file in the root directory:
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+   
+   Then update `src/integrations/supabase/client.ts` to use environment variables:
+   ```typescript
+   const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+   const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
    ```
    
    > 💡 **Need Supabase credentials?** 
    > 1. Create a free account at [supabase.com](https://supabase.com)
    > 2. Create a new project
    > 3. Find your URL and anon key in Project Settings → API
+   
+   > ⚠️ **Security Note:** The anon/publishable key is designed to be public and included in client-side code. Never commit your service role key or other sensitive secrets to version control.
 
 4. **Database Setup**
    
