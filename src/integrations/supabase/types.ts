@@ -58,6 +58,7 @@ export type Database = {
           created_at: string
           disposition: string
           dkim_result: string
+          envelope_to: string | null
           header_from: string
           id: string
           report_id: string
@@ -69,6 +70,7 @@ export type Database = {
           created_at?: string
           disposition: string
           dkim_result: string
+          envelope_to?: string | null
           header_from: string
           id?: string
           report_id: string
@@ -80,6 +82,7 @@ export type Database = {
           created_at?: string
           disposition?: string
           dkim_result?: string
+          envelope_to?: string | null
           header_from?: string
           id?: string
           report_id?: string

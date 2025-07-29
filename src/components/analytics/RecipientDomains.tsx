@@ -32,6 +32,7 @@ const RecipientDomains = () => {
         .from('dmarc_records')
         .select(`
           header_from,
+          envelope_to,
           count,
           dkim_result,
           spf_result,
@@ -47,7 +48,8 @@ const RecipientDomains = () => {
       const domainMap = new Map<string, any>();
       
       manualData?.forEach(record => {
-        const domain = record.header_from;
+        // Use envelope_to (recipient domain) if available, fallback to header_from
+        const domain = record.envelope_to || record.header_from;
         const isSuccess = (record.dkim_result === 'pass' || record.spf_result === 'pass');
         
         if (!domainMap.has(domain)) {

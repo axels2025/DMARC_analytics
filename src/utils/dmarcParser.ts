@@ -31,6 +31,7 @@ export interface DmarcRecord {
   };
   identifiers: {
     headerFrom: string;
+    envelopeTo?: string;
   };
   authResults: {
     dkim?: Array<{
@@ -361,6 +362,20 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
           throw new Error(`Record ${index + 1} has invalid or empty header_from domain`);
         }
 
+        // Extract envelope_to (recipient domain) - this is optional in DMARC reports
+        const envelopeToElement = getFirstChildElement(identifiers, 'envelope_to');
+        let envelopeTo: string | undefined;
+        if (envelopeToElement) {
+          try {
+            const envelopeToText = getTextContent(envelopeToElement);
+            if (envelopeToText) {
+              envelopeTo = validateDomain(envelopeToText);
+            }
+          } catch (error) {
+            console.warn(`[parseDmarcXml] Record ${index + 1} has invalid envelope_to, skipping: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          }
+        }
+
         // Parse DKIM results with enhanced validation
         const dkimElements = authResults ? getChildElements(authResults, 'dkim') : [];
         const dkimResults = dkimElements.map((dkim: Element, dkimIndex: number) => {
@@ -418,6 +433,7 @@ export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
           },
           identifiers: {
             headerFrom,
+            envelopeTo,
           },
           authResults: {
             dkim: dkimResults.length > 0 ? dkimResults : undefined,

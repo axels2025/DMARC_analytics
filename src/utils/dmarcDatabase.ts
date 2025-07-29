@@ -138,6 +138,7 @@ async function saveRecordWithAuthResults(reportId: string, record: DmarcRecord, 
         dkim_result: record.row.policyEvaluated.dkim,
         spf_result: record.row.policyEvaluated.spf,
         header_from: record.identifiers.headerFrom,
+        envelope_to: record.identifiers.envelopeTo,
       })
       .select('id')
       .single();
