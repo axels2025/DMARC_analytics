@@ -92,8 +92,9 @@ const RecipientDomains = () => {
       const domainMap = new Map<string, any>();
       
       manualData?.forEach(record => {
-        // Use envelope_to (recipient domain) if available, fallback to header_from
-        const domain = record.envelope_to || record.header_from;
+        // Only use envelope_to (recipient domain) - skip records without it
+        if (!record.envelope_to) return;
+        const domain = record.envelope_to;
         const isSuccess = (record.dkim_result === 'pass' || record.spf_result === 'pass');
         
         if (!domainMap.has(domain)) {
