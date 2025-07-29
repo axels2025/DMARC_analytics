@@ -15,6 +15,7 @@ interface RecipientDomainData {
   successRate: number;
   failureCount: number;
   lastSeen: string;
+  percentageOfTotal?: number;
 }
 
 const RecipientDomains = () => {
@@ -132,7 +133,16 @@ const RecipientDomains = () => {
         .sort((a, b) => b.emailCount - a.emailCount)
         .slice(0, 10);
 
-      setDomainData(processedData);
+      // Calculate total emails for percentage calculation
+      const totalEmails = processedData.reduce((sum, domain) => sum + domain.emailCount, 0);
+      
+      // Add percentage of total emails to each domain
+      const dataWithPercentages = processedData.map(domain => ({
+        ...domain,
+        percentageOfTotal: totalEmails > 0 ? Math.round((domain.emailCount / totalEmails) * 100) : 0
+      }));
+
+      setDomainData(dataWithPercentages);
     } catch (error) {
       console.error('Error fetching recipient domains:', error);
     } finally {
@@ -140,11 +150,16 @@ const RecipientDomains = () => {
     }
   };
 
-  const getSuccessRateColor = (rate: number) => {
-    if (rate >= 90) return "hsl(var(--chart-2))"; // Green
-    if (rate >= 70) return "hsl(var(--chart-3))"; // Yellow  
-    return "hsl(var(--chart-1))"; // Red
-  };
+  const getChartColors = () => [
+    "hsl(var(--chart-1))",
+    "hsl(var(--chart-2))", 
+    "hsl(var(--chart-3))",
+    "hsl(var(--chart-4))",
+    "hsl(var(--chart-5))",
+    "hsl(var(--primary))",
+    "hsl(var(--secondary))",
+    "hsl(var(--accent))"
+  ];
 
   const getSuccessRateVariant = (rate: number): "default" | "secondary" | "destructive" => {
     if (rate >= 90) return "default";
@@ -288,7 +303,7 @@ const RecipientDomains = () => {
                     <div>
                       <p className="font-medium">{domain.domain}</p>
                       <p className="text-sm text-muted-foreground">
-                        {domain.emailCount.toLocaleString()} emails • Last seen: {domain.lastSeen}
+                        {domain.emailCount.toLocaleString()} emails ({domain.percentageOfTotal}%) • Last seen: {domain.lastSeen}
                       </p>
                     </div>
                   </div>
@@ -336,7 +351,7 @@ const RecipientDomains = () => {
                   />
                   <Bar dataKey="emailCount" radius={[4, 4, 0, 0]}>
                     {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={getSuccessRateColor(entry.successRate)} />
+                      <Cell key={`cell-${index}`} fill={getChartColors()[index % getChartColors().length]} />
                     ))}
                   </Bar>
                 </BarChart>
