@@ -21,6 +21,8 @@ import OverviewCharts from "@/components/charts/OverviewCharts";
 import TrendAnalytics from "@/components/charts/TrendAnalytics";
 import RecentReports from "@/components/RecentReports";
 import MetricCard from "@/components/MetricCard";
+import RecipientDomains from "@/components/analytics/RecipientDomains";
+import AuthenticationPatterns from "@/components/analytics/AuthenticationPatterns";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
 import { useAuth } from "@/hooks/useAuth";
@@ -153,10 +155,12 @@ const Dashboard = () => {
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3 lg:w-96">
+        <TabsList className="grid w-full grid-cols-5 lg:w-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="reports">Recent Reports</TabsTrigger>
+          <TabsTrigger value="reports">Reports</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
+          <TabsTrigger value="recipients">Recipients</TabsTrigger>
+          <TabsTrigger value="auth-patterns">Authentication</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -179,6 +183,14 @@ const Dashboard = () => {
 
         <TabsContent value="analytics" className="space-y-6">
           <TrendAnalytics />
+        </TabsContent>
+
+        <TabsContent value="recipients" className="space-y-6">
+          <RecipientDomains />
+        </TabsContent>
+
+        <TabsContent value="auth-patterns" className="space-y-6">
+          <AuthenticationPatterns />
         </TabsContent>
       </Tabs>
 
