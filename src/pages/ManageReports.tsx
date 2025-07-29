@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -78,13 +79,26 @@ const ManageReports = () => {
         const startDate = new Date(report.date_range_begin * 1000).toLocaleDateString();
         const endDate = new Date(report.date_range_end * 1000).toLocaleDateString();
 
+        // Fetch records for this report to calculate email count and success rate
+        const { data: records } = await supabase
+          .from("dmarc_records")
+          .select("count, dkim_result, spf_result")
+          .eq("report_id", report.id);
+
+        const emailCount = records?.reduce((sum, record) => sum + record.count, 0) || 0;
+        const successfulEmails = records
+          ?.filter(r => r.dkim_result === "pass" && r.spf_result === "pass")
+          .reduce((sum, record) => sum + record.count, 0) || 0;
+        
+        const successRate = emailCount > 0 ? (successfulEmails / emailCount) * 100 : 0;
+
         processed.push({
           id: report.id,
           domain: report.domain,
           orgName: report.org_name,
           dateRange: `${startDate} to ${endDate}`,
-          emailCount: 0, // Will be calculated from records
-          successRate: 0, // Will be calculated from records
+          emailCount,
+          successRate: Math.round(successRate * 10) / 10,
           status: "processed",
           includeInDashboard: report.include_in_dashboard ?? true,
           created_at: report.created_at
