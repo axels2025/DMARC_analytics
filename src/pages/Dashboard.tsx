@@ -23,6 +23,9 @@ import RecentReports from "@/components/RecentReports";
 import MetricCard from "@/components/MetricCard";
 import RecipientDomains from "@/components/analytics/RecipientDomains";
 import AuthenticationPatterns from "@/components/analytics/AuthenticationPatterns";
+import IPIntelligence from "@/components/analytics/IPIntelligence";
+import PolicySimulator from "@/components/analytics/PolicySimulator";
+import SecurityMonitoring from "@/components/analytics/SecurityMonitoring";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
 import { useAuth } from "@/hooks/useAuth";
@@ -155,12 +158,15 @@ const Dashboard = () => {
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto">
+        <TabsList className="grid w-full grid-cols-7 lg:w-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="recipients">Recipients</TabsTrigger>
           <TabsTrigger value="auth-patterns">Authentication</TabsTrigger>
+          <TabsTrigger value="ip-intelligence">IP Intel</TabsTrigger>
+          <TabsTrigger value="policy">Policy</TabsTrigger>
+          <TabsTrigger value="security">Security</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
@@ -191,6 +197,18 @@ const Dashboard = () => {
 
         <TabsContent value="auth-patterns" className="space-y-6">
           <AuthenticationPatterns />
+        </TabsContent>
+
+        <TabsContent value="ip-intelligence" className="space-y-6">
+          <IPIntelligence />
+        </TabsContent>
+
+        <TabsContent value="policy" className="space-y-6">
+          <PolicySimulator />
+        </TabsContent>
+
+        <TabsContent value="security" className="space-y-6">
+          <SecurityMonitoring />
         </TabsContent>
       </Tabs>
 
