@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,10 +36,19 @@ import {
 
 const ReportDetail = () => {
   const { id } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { fetchReportById } = useDmarcData();
   const [reportData, setReportData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Check if user came from manage reports page
+  const cameFromManageReports = location.state?.from === 'manage-reports' || 
+                               document.referrer.includes('/manage-reports');
+
+  const getBackPath = () => cameFromManageReports ? '/manage-reports' : '/dashboard';
+  const getBackLabel = () => cameFromManageReports ? 'Back to Manage Reports' : 'Back to Dashboard';
 
   useEffect(() => {
     const loadReport = async () => {
@@ -205,10 +214,10 @@ const ReportDetail = () => {
     return (
       <div className="text-center text-red-600 p-6">
         <p>Error: {error || "Report not found"}</p>
-        <Link to="/">
+        <Link to={getBackPath()}>
           <Button variant="outline" className="mt-4">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
+            {getBackLabel()}
           </Button>
         </Link>
       </div>
@@ -220,10 +229,10 @@ const ReportDetail = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Link to="/">
+          <Link to={getBackPath()}>
             <Button variant="outline" size="sm">
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Dashboard
+              {getBackLabel()}
             </Button>
           </Link>
           <div>

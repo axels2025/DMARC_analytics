@@ -428,7 +428,10 @@ const ManageReports = () => {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center space-x-2">
-                          <Link to={`/report/${report.id}`}>
+                          <Link 
+                            to={`/report/${report.id}`}
+                            state={{ from: 'manage-reports' }}
+                          >
                             <Button variant="outline" size="sm">
                               <Eye className="w-4 h-4 mr-1" />
                               View
