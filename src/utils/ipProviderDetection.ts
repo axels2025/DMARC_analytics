@@ -30,7 +30,7 @@ class IPProviderCache {
     this.loadFromStorage();
   }
 
-  private async loadFromStorage(): Promise<void> {
+  public async loadFromStorage(): Promise<void> {
     if (this.loadPromise) return this.loadPromise;
     
     this.loadPromise = (async () => {
