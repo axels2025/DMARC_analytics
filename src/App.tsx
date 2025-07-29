@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
 import ReportDetail from "./pages/ReportDetail";
+import ManageReports from "./pages/ManageReports";
 import Auth from "./pages/Auth";
 import Layout from "./components/Layout";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -57,6 +58,13 @@ const App = () => {
                     <ProtectedRoute>
                       <Layout>
                         <ReportDetail />
+                      </Layout>
+                    </ProtectedRoute>
+                  } />
+                  <Route path="/manage-reports" element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ManageReports />
                       </Layout>
                     </ProtectedRoute>
                   } />

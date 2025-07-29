@@ -101,12 +101,20 @@ const Dashboard = () => {
             Monitor your email authentication and security posture
           </p>
         </div>
-        <Link to="/upload">
-          <Button className="bg-blue-600 hover:bg-blue-700">
-            <UploadIcon className="w-4 h-4 mr-2" />
-            Upload Report
-          </Button>
-        </Link>
+        <div className="flex items-center space-x-3">
+          <Link to="/manage-reports">
+            <Button variant="outline">
+              <Shield className="w-4 h-4 mr-2" />
+              Manage Reports
+            </Button>
+          </Link>
+          <Link to="/upload">
+            <Button className="bg-blue-600 hover:bg-blue-700">
+              <UploadIcon className="w-4 h-4 mr-2" />
+              Upload Report
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Metrics Overview */}
