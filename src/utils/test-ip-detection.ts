@@ -1,7 +1,7 @@
 // Test file for IP provider detection
 // This can be run in the browser console or used for debugging
 
-import { detectIPProvider, getProviderCacheStats, clearProviderCache } from './ipProviderDetection';
+import { detectIPProvider, getProviderCacheStats, clearProviderCache, testDNSLookup } from './ipProviderDetection';
 
 // Test IPs that should demonstrate different detection methods
 const testIPs = [
@@ -76,4 +76,6 @@ if (typeof window !== 'undefined') {
   globalWindow.testSingleIP = testSingleIP;
   globalWindow.detectIPProvider = detectIPProvider;
   globalWindow.getProviderCacheStats = getProviderCacheStats;
+  globalWindow.testDNSLookup = testDNSLookup;
+  globalWindow.clearProviderCache = clearProviderCache;
 }

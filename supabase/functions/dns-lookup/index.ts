@@ -125,11 +125,24 @@ function extractProviderFromHostname(hostname: string): string | null {
   return null;
 }
 
-// Perform reverse DNS lookup
+// Perform reverse DNS lookup for both IPv4 and IPv6
 async function performReverseDNS(ip: string): Promise<string | null> {
   try {
-    // Use a DNS-over-HTTPS service for reverse DNS lookup
-    const dohUrl = `https://cloudflare-dns.com/dns-query?name=${ip.split('.').reverse().join('.')}.in-addr.arpa&type=PTR`;
+    let dohUrl: string;
+    
+    // Check if it's IPv6 or IPv4
+    if (ip.includes(':')) {
+      // IPv6 - convert to reverse format
+      const expandedIPv6 = expandIPv6(ip);
+      const reversedIPv6 = expandedIPv6.replace(/:/g, '').split('').reverse().join('.');
+      dohUrl = `https://cloudflare-dns.com/dns-query?name=${reversedIPv6}.ip6.arpa&type=PTR`;
+      console.log(`IPv6 reverse DNS query for ${ip}: ${reversedIPv6}.ip6.arpa`);
+    } else {
+      // IPv4 - original logic
+      const reversedIPv4 = ip.split('.').reverse().join('.');
+      dohUrl = `https://cloudflare-dns.com/dns-query?name=${reversedIPv4}.in-addr.arpa&type=PTR`;
+      console.log(`IPv4 reverse DNS query for ${ip}: ${reversedIPv4}.in-addr.arpa`);
+    }
     
     const response = await fetch(dohUrl, {
       headers: {
@@ -138,22 +151,45 @@ async function performReverseDNS(ip: string): Promise<string | null> {
     });
     
     if (!response.ok) {
+      console.warn(`DNS query failed: ${response.status} for IP ${ip}`);
       throw new Error(`DNS query failed: ${response.status}`);
     }
     
     const data = await response.json();
+    console.log(`DNS response for ${ip}:`, data);
     
     if (data.Answer && data.Answer.length > 0) {
       // Extract hostname from PTR response
       const hostname = data.Answer[0].data;
-      return hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+      const cleanHostname = hostname.endsWith('.') ? hostname.slice(0, -1) : hostname;
+      console.log(`Resolved ${ip} to hostname: ${cleanHostname}`);
+      return cleanHostname;
     }
     
+    console.log(`No PTR record found for ${ip}`);
     return null;
   } catch (error) {
     console.warn(`Reverse DNS lookup failed for ${ip}:`, error);
     return null;
   }
+}
+
+// Helper function to expand IPv6 addresses
+function expandIPv6(ip: string): string {
+  // Handle :: shorthand and ensure full representation
+  const parts = ip.split('::');
+  if (parts.length === 2) {
+    const left = parts[0].split(':').filter(p => p !== '');
+    const right = parts[1].split(':').filter(p => p !== '');
+    const missing = 8 - left.length - right.length;
+    const middle = Array(missing).fill('0000');
+    return [...left, ...middle, ...right]
+      .map(part => part.padStart(4, '0'))
+      .join(':');
+  }
+  
+  // Already expanded or no shorthand
+  return ip.split(':').map(part => part.padStart(4, '0')).join(':');
 }
 
 serve(async (req) => {
@@ -204,11 +240,15 @@ serve(async (req) => {
       );
     }
 
-    // Validate IP address format
+    // Validate IP address format (more flexible IPv6 validation)
     const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
-    const ipv6Regex = /^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
+    const ipv6Regex = /^([0-9a-fA-F]*:){2,7}[0-9a-fA-F]*$/; // Allow :: shorthand
     
-    if (!ipv4Regex.test(ip) && !ipv6Regex.test(ip)) {
+    const isValidIPv4 = ipv4Regex.test(ip);
+    const isValidIPv6 = ip.includes(':') && (ipv6Regex.test(ip) || ip.includes('::'));
+    
+    if (!isValidIPv4 && !isValidIPv6) {
+      console.warn(`Invalid IP address format: ${ip}`);
       return new Response(
         JSON.stringify({ success: false, error: 'Invalid IP address format' }),
         { 
@@ -217,6 +257,8 @@ serve(async (req) => {
         }
       );
     }
+    
+    console.log(`Valid IP address received: ${ip} (IPv${isValidIPv4 ? '4' : '6'})`)
 
     // Perform reverse DNS lookup
     const hostname = await performReverseDNS(ip);

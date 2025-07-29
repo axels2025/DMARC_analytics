@@ -240,46 +240,48 @@ interface DNSLookupResponse {
  */
 async function getProviderFromReverseDNS(ip: string): Promise<{ provider: string | null; hostname: string | null }> {
   try {
-    // Get Supabase URL from environment or use default
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (!supabaseUrl) {
-      console.warn('Supabase URL not configured, skipping DNS lookup');
-      return { provider: null, hostname: null };
-    }
+    // Use hardcoded Supabase configuration (Lovable platform approach)
+    const supabaseUrl = "https://epzcwplbouhbucbmhcur.supabase.co";
+    const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU";
 
     const dnsLookupUrl = `${supabaseUrl}/functions/v1/dns-lookup`;
+    
+    console.log(`🔍 DNS Lookup: Attempting reverse DNS for IP ${ip}`);
     
     const response = await fetch(dnsLookupUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        'Authorization': `Bearer ${supabaseAnonKey}`,
       },
       body: JSON.stringify({ ip }),
     });
 
     if (!response.ok) {
       if (response.status === 429) {
-        console.warn('DNS lookup rate limit exceeded');
+        console.warn(`🚫 DNS lookup rate limit exceeded for ${ip}`);
         return { provider: null, hostname: null };
       }
+      console.error(`❌ DNS lookup failed for ${ip}: ${response.status} ${response.statusText}`);
       throw new Error(`DNS lookup failed: ${response.status}`);
     }
 
     const data: DNSLookupResponse = await response.json();
+    console.log(`📋 DNS lookup response for ${ip}:`, data);
     
     if (!data.success) {
-      console.warn(`DNS lookup failed for ${ip}: ${data.error}`);
+      console.warn(`⚠️ DNS lookup failed for ${ip}: ${data.error}`);
       return { provider: null, hostname: null };
     }
 
+    console.log(`✅ DNS lookup successful for ${ip}: hostname=${data.hostname}, provider=${data.provider}`);
     return {
       provider: data.provider || null,
       hostname: data.hostname || null,
     };
 
   } catch (error) {
-    console.warn(`Reverse DNS lookup failed for ${ip}:`, error);
+    console.error(`💥 Reverse DNS lookup failed for ${ip}:`, error);
     return { provider: null, hostname: null };
   }
 }
@@ -371,11 +373,16 @@ function extractProviderFromHostname(hostname: string): string | null {
  * Main function to detect email service provider from IP address
  */
 export async function detectIPProvider(ip: string): Promise<string> {
+  console.log(`🕵️ Detecting provider for IP: ${ip}`);
+  
   // Check cache first
   const cachedEntry = await providerCache.get(ip);
   if (cachedEntry) {
+    console.log(`💾 Cache hit for ${ip}: ${cachedEntry.provider} (source: ${cachedEntry.source})`);
     return cachedEntry.provider;
   }
+  
+  console.log(`🔍 No cache entry for ${ip}, performing detection...`);
   
   let provider: string | null = null;
   let hostname: string | null = null;
@@ -384,17 +391,27 @@ export async function detectIPProvider(ip: string): Promise<string> {
   try {
     // Validate IP address format
     if (!isIPv4(ip) && !isIPv6(ip)) {
+      console.warn(`❌ Invalid IP address format: ${ip}`);
       provider = "Invalid IP Address";
     } else if (isIPv4(ip)) {
       // Try IPv4 range detection first
+      console.log(`🌐 Checking IPv4 ranges for ${ip}`);
       provider = detectIPv4Provider(ip);
+      if (provider) {
+        console.log(`✅ IPv4 range match: ${provider}`);
+      }
     } else if (isIPv6(ip)) {
       // Try IPv6 prefix detection
+      console.log(`🌐 Checking IPv6 prefixes for ${ip}`);
       provider = detectIPv6Provider(ip);
+      if (provider) {
+        console.log(`✅ IPv6 prefix match: ${provider}`);
+      }
     }
     
     // If no provider found through IP ranges, try reverse DNS
     if (!provider) {
+      console.log(`🔍 No IP range match for ${ip}, attempting DNS lookup...`);
       const dnsResult = await getProviderFromReverseDNS(ip);
       provider = dnsResult.provider;
       hostname = dnsResult.hostname;
@@ -402,21 +419,27 @@ export async function detectIPProvider(ip: string): Promise<string> {
       
       // If DNS lookup provided hostname but no provider, try to extract provider
       if (!provider && hostname) {
+        console.log(`🔧 Extracting provider from hostname: ${hostname}`);
         provider = extractProviderFromHostname(hostname);
+        if (provider) {
+          console.log(`✅ Extracted provider from hostname: ${provider}`);
+        }
       }
     }
     
     // Final fallback
     if (!provider) {
+      console.log(`❓ No provider detected for ${ip}, marking as Unknown Provider`);
       provider = "Unknown Provider";
     }
     
   } catch (error) {
-    console.error(`Error detecting provider for IP ${ip}:`, error);
+    console.error(`💥 Error detecting provider for IP ${ip}:`, error);
     provider = "Unknown Provider";
   }
   
   // Cache the result
+  console.log(`💾 Caching result for ${ip}: ${provider} (source: ${source})`);
   providerCache.set(ip, provider, hostname || undefined, source);
   
   return provider;
@@ -482,4 +505,22 @@ export async function getProviderCacheStats(): Promise<{
     oldestEntry,
     newestEntry,
   };
+}
+
+/**
+ * Debug function to test DNS lookup functionality
+ */
+export async function testDNSLookup(ip: string): Promise<void> {
+  console.log(`🧪 Testing DNS lookup for IP: ${ip}`);
+  
+  // Clear cache for this IP to force DNS lookup
+  const cacheInstance = providerCache as unknown as { cache: Map<string, CacheEntry> };
+  cacheInstance.cache.delete(ip);
+  
+  const result = await detectIPProvider(ip);
+  console.log(`🔬 Test result: ${result}`);
+  
+  // Show cache stats
+  const stats = await getProviderCacheStats();
+  console.log(`📊 Cache stats after test:`, stats);
 }
