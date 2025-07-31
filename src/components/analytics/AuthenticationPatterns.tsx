@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from "@/components/ui/chart";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
-import { Shield, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from "recharts";
+import { Shield, AlertTriangle, CheckCircle, XCircle, Info, TrendingUp, TrendingDown } from "lucide-react";
 
 interface AuthPatternData {
   pattern: string;
@@ -178,16 +180,63 @@ const AuthenticationPatterns = () => {
   const warningRate = patternData.filter(p => p.severity === 'warning').reduce((sum, p) => sum + p.percentage, 0);
   const errorRate = patternData.filter(p => p.severity === 'error').reduce((sum, p) => sum + p.percentage, 0);
 
+  // Chart configurations
+  const pieChartConfig = {
+    success: {
+      label: "Both Pass",
+      color: "hsl(var(--chart-2))",
+    },
+    warning: {
+      label: "Partial Pass", 
+      color: "hsl(var(--chart-3))",
+    },
+    error: {
+      label: "Both Fail",
+      color: "hsl(var(--chart-1))",
+    },
+  };
+
+  const trendChartConfig = {
+    both: {
+      label: "Both Pass",
+      color: "hsl(var(--chart-2))",
+    },
+    dkimPass: {
+      label: "DKIM Only",
+      color: "hsl(var(--chart-3))",
+    },
+    spfPass: {
+      label: "SPF Only", 
+      color: "hsl(var(--chart-4))",
+    },
+    neither: {
+      label: "Both Fail",
+      color: "hsl(var(--chart-1))",
+    },
+  };
+
   return (
     <div className="space-y-6">
+      {/* Educational Alert */}
+      <Alert>
+        <Info className="h-4 w-4" />
+        <AlertDescription>
+          <strong>Authentication Guide:</strong> DMARC checks both SPF and DKIM authentication. 
+          <strong> Both Pass</strong> = Optimal security (SPF + DKIM pass). 
+          <strong> Partial Pass</strong> = One method passes (better than none, but not ideal). 
+          <strong> Both Fail</strong> = High risk - emails may be spoofed or misconfigured.
+        </AlertDescription>
+      </Alert>
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Both Pass</p>
+                <p className="text-sm font-medium text-muted-foreground">Both Pass (Optimal)</p>
                 <p className="text-2xl font-bold text-green-600">{successRate}%</p>
+                <p className="text-xs text-muted-foreground">SPF + DKIM authenticated</p>
               </div>
               <CheckCircle className="w-8 h-8 text-green-600" />
             </div>
@@ -198,8 +247,9 @@ const AuthenticationPatterns = () => {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Partial Pass</p>
+                <p className="text-sm font-medium text-muted-foreground">Partial Pass (Warning)</p>
                 <p className="text-2xl font-bold text-yellow-600">{warningRate}%</p>
+                <p className="text-xs text-muted-foreground">Only SPF or DKIM passes</p>
               </div>
               <AlertTriangle className="w-8 h-8 text-yellow-600" />
             </div>
@@ -210,8 +260,9 @@ const AuthenticationPatterns = () => {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Both Fail</p>
+                <p className="text-sm font-medium text-muted-foreground">Both Fail (Critical)</p>
                 <p className="text-2xl font-bold text-red-600">{errorRate}%</p>
+                <p className="text-xs text-muted-foreground">Neither SPF nor DKIM passes</p>
               </div>
               <XCircle className="w-8 h-8 text-red-600" />
             </div>
@@ -229,32 +280,46 @@ const AuthenticationPatterns = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={patternData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    dataKey="count"
-                    label={({ pattern, percentage }) => `${percentage}%`}
-                  >
-                    {patternData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={getPatternColor(entry.severity)} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    formatter={(value, name, props) => [
-                      `${value} records (${props.payload.emailCount.toLocaleString()} emails)`,
-                      "Count"
-                    ]}
-                    labelFormatter={(pattern) => pattern}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            <ChartContainer config={pieChartConfig} className="h-64">
+              <PieChart>
+                <Pie
+                  data={patternData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={90}
+                  dataKey="count"
+                  nameKey="pattern"
+                >
+                  {patternData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={getPatternColor(entry.severity)} />
+                  ))}
+                </Pie>
+                <ChartTooltip 
+                  content={<ChartTooltipContent />}
+                  formatter={(value: any, name: string, props: any) => [
+                    `${value} records (${props.payload.emailCount?.toLocaleString() || 0} emails)`,
+                    props.payload.pattern
+                  ]}
+                />
+                <Legend 
+                  content={({ payload }) => (
+                    <div className="flex flex-wrap justify-center gap-4 mt-4">
+                      {patternData.map((entry, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <div 
+                            className="w-3 h-3 rounded"
+                            style={{ backgroundColor: getPatternColor(entry.severity) }}
+                          />
+                          <span className="text-sm">{entry.pattern}</span>
+                          <span className="text-sm text-muted-foreground">({entry.percentage}%)</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                />
+              </PieChart>
+            </ChartContainer>
           </CardContent>
         </Card>
 
@@ -264,23 +329,45 @@ const AuthenticationPatterns = () => {
             <CardTitle>Authentication Trends Over Time</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={trendData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="both" stackId="a" fill="hsl(var(--chart-2))" name="Both Pass" />
-                  <Bar dataKey="dkimPass" stackId="a" fill="hsl(var(--chart-3))" name="DKIM Only" />
-                  <Bar dataKey="spfPass" stackId="a" fill="hsl(var(--chart-4))" name="SPF Only" />
-                  <Bar dataKey="neither" stackId="a" fill="hsl(var(--chart-1))" name="Both Fail" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ChartContainer config={trendChartConfig} className="h-64">
+              <BarChart data={trendData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent />} />
+                <Bar dataKey="both" stackId="a" fill="var(--color-both)" name="Both Pass" />
+                <Bar dataKey="dkimPass" stackId="a" fill="var(--color-dkimPass)" name="DKIM Only" />
+                <Bar dataKey="spfPass" stackId="a" fill="var(--color-spfPass)" name="SPF Only" />
+                <Bar dataKey="neither" stackId="a" fill="var(--color-neither)" name="Both Fail" />
+              </BarChart>
+            </ChartContainer>
           </CardContent>
         </Card>
       </div>
+
+      {/* Improvement Recommendations */}
+      {errorRate > 10 && (
+        <Alert className="border-red-200 bg-red-50">
+          <AlertTriangle className="h-4 w-4 text-red-600" />
+          <AlertDescription>
+            <strong>Action Required:</strong> {errorRate}% of your emails fail both SPF and DKIM authentication. 
+            Consider: 1) Verify SPF record includes all sending IPs, 2) Check DKIM key configuration, 
+            3) Review DNS settings, 4) Ensure proper email routing.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {warningRate > 30 && (
+        <Alert className="border-yellow-200 bg-yellow-50">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <AlertDescription>
+            <strong>Improvement Opportunity:</strong> {warningRate}% of emails have partial authentication. 
+            To achieve both SPF and DKIM pass: 1) Ensure all sending servers are in SPF record, 
+            2) Verify DKIM signatures are properly applied, 3) Check for third-party email services.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Detailed Pattern List */}
       <Card>
@@ -307,6 +394,44 @@ const AuthenticationPatterns = () => {
                 </div>
               </div>
             ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Best Practices */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Info className="w-5 h-5" />
+            Authentication Best Practices
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                SPF (Sender Policy Framework)
+              </h4>
+              <ul className="space-y-1 text-muted-foreground">
+                <li>• Include all authorized sending IPs</li>
+                <li>• Use -all for strict policy</li>
+                <li>• Keep record under 255 characters</li>
+                <li>• Test changes before deployment</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-semibold mb-2 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-blue-600" />
+                DKIM (DomainKeys Identified Mail)
+              </h4>
+              <ul className="space-y-1 text-muted-foreground">
+                <li>• Use strong key lengths (2048-bit)</li>
+                <li>• Rotate keys regularly</li>
+                <li>• Sign all outgoing emails</li>
+                <li>• Monitor key validity</li>
+              </ul>
+            </div>
           </div>
         </CardContent>
       </Card>
