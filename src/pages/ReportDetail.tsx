@@ -21,6 +21,10 @@ import {
 } from "lucide-react";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { detectIPProviders } from "@/utils/ipProviderDetection";
+import { exportReportAsXML, exportReportAsCSV, exportReportAsPDF } from "@/utils/exportService";
+import ExportModal from "@/components/ExportModal";
+import { useAuth } from "@/hooks/useAuth";
+import { toast } from "sonner";
 import { 
   ResponsiveContainer, 
   PieChart, 
@@ -39,9 +43,11 @@ const ReportDetail = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { fetchReportById } = useDmarcData();
+  const { user } = useAuth();
   const [reportData, setReportData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Check if user came from manage reports page
   const cameFromManageReports = location.state?.from === 'manage-reports' || 
@@ -199,6 +205,33 @@ const ReportDetail = () => {
     loadReport();
   }, [id, fetchReportById]);
 
+  const handleExport = async (format: 'csv' | 'pdf' | 'xml') => {
+    if (!id || !user?.id) {
+      toast.error('Unable to export: missing report or user information');
+      return;
+    }
+
+    try {
+      switch (format) {
+        case 'xml':
+          await exportReportAsXML(id, user.id);
+          toast.success('XML report downloaded successfully');
+          break;
+        case 'csv':
+          await exportReportAsCSV(id, user.id);
+          toast.success('CSV report downloaded successfully');
+          break;
+        case 'pdf':
+          await exportReportAsPDF(id, user.id);
+          toast.success('PDF report generated successfully');
+          break;
+      }
+    } catch (error) {
+      console.error('Export failed:', error);
+      toast.error(error instanceof Error ? error.message : 'Export failed');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
@@ -242,7 +275,7 @@ const ReportDetail = () => {
             </p>
           </div>
         </div>
-        <Button variant="outline">
+        <Button variant="outline" onClick={() => setShowExportModal(true)}>
           <Download className="w-4 h-4 mr-2" />
           Export Report
         </Button>
@@ -622,6 +655,14 @@ const ReportDetail = () => {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        onExport={handleExport}
+        isIndividualReport={true}
+      />
     </div>
   );
 };

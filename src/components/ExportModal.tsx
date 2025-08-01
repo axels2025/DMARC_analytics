@@ -6,16 +6,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onExport: (format: 'csv' | 'pdf') => Promise<void>;
+  onExport: (format: 'csv' | 'pdf' | 'xml') => Promise<void>;
+  isIndividualReport?: boolean;
 }
 
-const ExportModal = ({ isOpen, onClose, onExport }: ExportModalProps) => {
+const ExportModal = ({ isOpen, onClose, onExport, isIndividualReport = false }: ExportModalProps) => {
   const [isExporting, setIsExporting] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'csv' | 'pdf' | null>(null);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'pdf' | 'xml' | null>(null);
 
   if (!isOpen) return null;
 
-  const handleExport = async (format: 'csv' | 'pdf') => {
+  const handleExport = async (format: 'csv' | 'pdf' | 'xml') => {
     setIsExporting(true);
     setExportFormat(format);
     
@@ -46,10 +47,41 @@ const ExportModal = ({ isOpen, onClose, onExport }: ExportModalProps) => {
           </div>
 
           <p className="text-gray-600 mb-6">
-            Choose your preferred export format for the comprehensive DMARC analytics report.
+            Choose your preferred export format for the {isIndividualReport ? 'DMARC report' : 'comprehensive DMARC analytics report'}.
           </p>
 
           <div className="space-y-4">
+            {isIndividualReport && (
+              <Card 
+                className={`cursor-pointer transition-all hover:shadow-md ${
+                  isExporting && exportFormat === 'xml' ? 'ring-2 ring-blue-500' : ''
+                }`}
+                onClick={() => !isExporting && handleExport('xml')}
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-blue-100 rounded-lg">
+                      <Download className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base">XML Format</CardTitle>
+                      <CardDescription>Original DMARC report format</CardDescription>
+                    </div>
+                    {isExporting && exportFormat === 'xml' && (
+                      <Loader className="w-4 h-4 animate-spin ml-auto" />
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>• Exact original XML file as imported</li>
+                    <li>• Can be re-uploaded to other tools</li>
+                    <li>• Complete raw DMARC data</li>
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+            
             <Card 
               className={`cursor-pointer transition-all hover:shadow-md ${
                 isExporting && exportFormat === 'csv' ? 'ring-2 ring-blue-500' : ''

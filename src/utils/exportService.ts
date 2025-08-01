@@ -455,3 +455,212 @@ export async function exportAsPDF(userId: string): Promise<void> {
     downloadFile(htmlContent, `dmarc-analytics-${timestamp}.html`, 'text/html');
   }
 }
+
+/**
+ * Exports a single report as XML (original format)
+ */
+export async function exportReportAsXML(reportId: string, userId: string): Promise<void> {
+  const { data: report, error } = await supabase
+    .from('dmarc_reports')
+    .select('raw_xml, domain, org_name, date_range_begin, date_range_end')
+    .eq('id', reportId)
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to fetch report: ${error.message}`);
+  }
+
+  if (!report?.raw_xml) {
+    throw new Error('No XML data available for this report');
+  }
+
+  const startDate = formatUnixDate(report.date_range_begin);
+  const endDate = formatUnixDate(report.date_range_end);
+  const filename = `dmarc-report-${report.domain}-${startDate.replace(/[^\w]/g, '')}-${endDate.replace(/[^\w]/g, '')}.xml`;
+  
+  downloadFile(report.raw_xml, filename, 'application/xml');
+}
+
+/**
+ * Exports a single report as CSV
+ */
+export async function exportReportAsCSV(reportId: string, userId: string): Promise<void> {
+  const { data: report, error: reportError } = await supabase
+    .from('dmarc_reports')
+    .select('*')
+    .eq('id', reportId)
+    .eq('user_id', userId)
+    .single();
+
+  if (reportError) {
+    throw new Error(`Failed to fetch report: ${reportError.message}`);
+  }
+
+  const { data: records, error: recordsError } = await supabase
+    .from('dmarc_records')
+    .select('*')
+    .eq('report_id', reportId);
+
+  if (recordsError) {
+    throw new Error(`Failed to fetch records: ${recordsError.message}`);
+  }
+
+  if (!records || records.length === 0) {
+    throw new Error('No records available for this report');
+  }
+
+  const headers = [
+    'Source IP',
+    'Count',
+    'DKIM Result',
+    'SPF Result',
+    'Disposition',
+    'Header From',
+    'Envelope To'
+  ];
+
+  const rows = records.map(record => [
+    record.source_ip,
+    record.count,
+    record.dkim_result,
+    record.spf_result,
+    record.disposition,
+    record.header_from,
+    record.envelope_to || 'N/A'
+  ]);
+
+  const csvContent = [
+    headers.join(','),
+    ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+  ].join('\n');
+
+  const startDate = formatUnixDate(report.date_range_begin);
+  const endDate = formatUnixDate(report.date_range_end);
+  const filename = `dmarc-report-${report.domain}-${startDate.replace(/[^\w]/g, '')}-${endDate.replace(/[^\w]/g, '')}.csv`;
+  
+  downloadFile(csvContent, filename, 'text/csv');
+}
+
+/**
+ * Exports a single report as PDF
+ */
+export async function exportReportAsPDF(reportId: string, userId: string): Promise<void> {
+  const { data: report, error: reportError } = await supabase
+    .from('dmarc_reports')
+    .select('*')
+    .eq('id', reportId)
+    .eq('user_id', userId)
+    .single();
+
+  if (reportError) {
+    throw new Error(`Failed to fetch report: ${reportError.message}`);
+  }
+
+  const { data: records, error: recordsError } = await supabase
+    .from('dmarc_records')
+    .select('*')
+    .eq('report_id', reportId);
+
+  if (recordsError) {
+    throw new Error(`Failed to fetch records: ${recordsError.message}`);
+  }
+
+  const totalEmails = records?.reduce((sum, r) => sum + r.count, 0) || 0;
+  const passedEmails = records?.filter(r => r.dkim_result === 'pass' && r.spf_result === 'pass')
+    .reduce((sum, r) => sum + r.count, 0) || 0;
+  const successRate = totalEmails > 0 ? Math.round((passedEmails / totalEmails) * 100 * 10) / 10 : 0;
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>DMARC Report - ${report.domain}</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
+        .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #2563eb; padding-bottom: 20px; }
+        .header h1 { color: #2563eb; margin-bottom: 5px; font-size: 28px; }
+        .summary { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 15px; }
+        .summary-item { background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #2563eb; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        th { background: #f3f4f6; font-weight: 600; color: #374151; }
+        .success-rate { color: #059669; font-weight: 600; }
+        .failure-rate { color: #dc2626; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>DMARC Report - ${report.domain}</h1>
+        <p>Report from ${report.org_name} • ${formatDateRange(report.date_range_begin, report.date_range_end)}</p>
+      </div>
+      
+      <div class="summary">
+        <h2>Summary</h2>
+        <div class="summary-grid">
+          <div class="summary-item">
+            <h3>Total Emails</h3>
+            <p>${totalEmails.toLocaleString()}</p>
+          </div>
+          <div class="summary-item">
+            <h3>Success Rate</h3>
+            <p class="success-rate">${successRate}%</p>
+          </div>
+          <div class="summary-item">
+            <h3>Policy</h3>
+            <p>p=${report.policy_p}</p>
+          </div>
+          <div class="summary-item">
+            <h3>Unique IPs</h3>
+            <p>${[...new Set(records?.map(r => r.source_ip) || [])].length}</p>
+          </div>
+        </div>
+      </div>
+      
+      <div>
+        <h2>Record Details</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Source IP</th>
+              <th>Count</th>
+              <th>DKIM</th>
+              <th>SPF</th>
+              <th>Disposition</th>
+              <th>Header From</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${records?.map(record => `
+              <tr>
+                <td>${record.source_ip}</td>
+                <td>${record.count.toLocaleString()}</td>
+                <td>${record.dkim_result}</td>
+                <td>${record.spf_result}</td>
+                <td>${record.disposition}</td>
+                <td>${record.header_from}</td>
+              </tr>
+            `).join('') || ''}
+          </tbody>
+        </table>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const printWindow = window.open('', '_blank');
+  
+  if (printWindow) {
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.print();
+    };
+  } else {
+    const startDate = formatUnixDate(report.date_range_begin);
+    const endDate = formatUnixDate(report.date_range_end);
+    const filename = `dmarc-report-${report.domain}-${startDate.replace(/[^\w]/g, '')}-${endDate.replace(/[^\w]/g, '')}.html`;
+    downloadFile(htmlContent, filename, 'text/html');
+  }
+}
