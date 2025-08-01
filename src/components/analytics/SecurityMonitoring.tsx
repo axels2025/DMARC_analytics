@@ -32,7 +32,11 @@ interface ThreatData {
   totalThreats: number;
 }
 
-const SecurityMonitoring = () => {
+interface SecurityMonitoringProps {
+  selectedDomain?: string;
+}
+
+const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
   const { user } = useAuth();
   const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
   const [metrics, setMetrics] = useState<SecurityMetrics | null>(null);
@@ -43,11 +47,11 @@ const SecurityMonitoring = () => {
     if (user) {
       fetchSecurityData();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const fetchSecurityData = async () => {
     try {
-      const { data: records, error } = await supabase
+      let recordsQuery = supabase
         .from('dmarc_records')
         .select(`
           source_ip,
@@ -56,10 +60,15 @@ const SecurityMonitoring = () => {
           spf_result,
           header_from,
           created_at,
-          dmarc_reports!inner(user_id, policy_domain)
+          dmarc_reports!inner(user_id, policy_domain, domain)
         `)
-        .eq('dmarc_reports.user_id', user?.id)
-        .order('created_at', { ascending: false });
+        .eq('dmarc_reports.user_id', user?.id);
+
+      if (selectedDomain) {
+        recordsQuery = recordsQuery.eq('dmarc_reports.domain', selectedDomain);
+      }
+
+      const { data: records, error } = await recordsQuery.order('created_at', { ascending: false });
 
       if (error) throw error;
 

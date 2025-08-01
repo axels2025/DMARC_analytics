@@ -25,7 +25,11 @@ interface GeographicData {
   successRate: number;
 }
 
-const IPIntelligence = () => {
+interface IPIntelligenceProps {
+  selectedDomain?: string;
+}
+
+const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
   const { user } = useAuth();
   const [ipData, setIpData] = useState<IPData[]>([]);
   const [geoData, setGeoData] = useState<GeographicData[]>([]);
@@ -36,11 +40,11 @@ const IPIntelligence = () => {
     if (user) {
       fetchIPIntelligence();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const fetchIPIntelligence = async () => {
     try {
-      const { data, error } = await supabase
+      let recordsQuery = supabase
         .from('dmarc_records')
         .select(`
           source_ip,
@@ -48,9 +52,15 @@ const IPIntelligence = () => {
           dkim_result,
           spf_result,
           created_at,
-          dmarc_reports!inner(user_id)
+          dmarc_reports!inner(user_id, domain)
         `)
         .eq('dmarc_reports.user_id', user?.id);
+
+      if (selectedDomain) {
+        recordsQuery = recordsQuery.eq('dmarc_reports.domain', selectedDomain);
+      }
+
+      const { data, error } = await recordsQuery;
 
       if (error) throw error;
 

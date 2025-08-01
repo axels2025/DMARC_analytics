@@ -22,9 +22,13 @@ import { useDmarcData } from "@/hooks/useDmarcData";
 import { Loader } from "lucide-react";
 import { detectIPProviders } from "@/utils/ipProviderDetection";
 
-const OverviewCharts = () => {
+interface OverviewChartsProps {
+  selectedDomain?: string;
+}
+
+const OverviewCharts = ({ selectedDomain }: OverviewChartsProps) => {
   const { user } = useAuth();
-  const { metrics } = useDmarcData();
+  const { metrics } = useDmarcData(selectedDomain);
   const [authStatusData, setAuthStatusData] = useState<any[]>([]);
   const [providerData, setProviderData] = useState<any[]>([]);
   const [trendData, setTrendData] = useState<any[]>([]);
@@ -38,10 +42,16 @@ const OverviewCharts = () => {
       try {
         // Fetch authentication status data - use client-side filtering approach
         // First get all reports for the user to filter by include_in_dashboard
-        const { data: allReports } = await supabase
+        let reportsQuery = supabase
           .from("dmarc_reports")
           .select("*")
           .eq("user_id", user.id);
+
+        if (selectedDomain) {
+          reportsQuery = reportsQuery.eq("domain", selectedDomain);
+        }
+
+        const { data: allReports } = await reportsQuery;
 
         // Filter reports based on include_in_dashboard (client-side filtering)
         const includedReports = allReports?.filter(report => 

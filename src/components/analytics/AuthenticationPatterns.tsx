@@ -24,7 +24,11 @@ interface TrendData {
   neither: number;
 }
 
-const AuthenticationPatterns = () => {
+interface AuthenticationPatternsProps {
+  selectedDomain?: string;
+}
+
+const AuthenticationPatterns = ({ selectedDomain }: AuthenticationPatternsProps) => {
   const { user } = useAuth();
   const [patternData, setPatternData] = useState<AuthPatternData[]>([]);
   const [trendData, setTrendData] = useState<TrendData[]>([]);
@@ -34,20 +38,26 @@ const AuthenticationPatterns = () => {
     if (user) {
       fetchAuthPatterns();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const fetchAuthPatterns = async () => {
     try {
-      const { data, error } = await supabase
+      let recordsQuery = supabase
         .from('dmarc_records')
         .select(`
           dkim_result,
           spf_result,
           count,
           created_at,
-          dmarc_reports!inner(user_id)
+          dmarc_reports!inner(user_id, domain)
         `)
         .eq('dmarc_reports.user_id', user?.id);
+
+      if (selectedDomain) {
+        recordsQuery = recordsQuery.eq('dmarc_reports.domain', selectedDomain);
+      }
+
+      const { data, error } = await recordsQuery;
 
       if (error) throw error;
 

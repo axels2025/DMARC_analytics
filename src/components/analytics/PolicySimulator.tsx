@@ -8,6 +8,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 import { Settings, AlertTriangle, Target, TrendingUp, Mail, Shield, CheckCircle, XCircle } from "lucide-react";
 
+interface PolicySimulatorProps {
+  selectedDomain?: string;
+}
+
 interface PolicyData {
   currentPolicy: {
     p: string;
@@ -30,7 +34,7 @@ interface PolicyData {
   };
 }
 
-const PolicySimulator = () => {
+const PolicySimulator = ({ selectedDomain }: PolicySimulatorProps) => {
   const { user } = useAuth();
   const [policyData, setPolicyData] = useState<PolicyData | null>(null);
   const [loading, setLoading] = useState(true);

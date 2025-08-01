@@ -47,7 +47,11 @@ interface TopSourceIP {
   rate: number;
 }
 
-const TrendAnalytics = () => {
+interface TrendAnalyticsProps {
+  selectedDomain?: string;
+}
+
+const TrendAnalytics = ({ selectedDomain }: TrendAnalyticsProps) => {
   const { user } = useAuth();
   const [trendData, setTrendData] = useState<TrendData[]>([]);
   const [providerTrends, setProviderTrends] = useState<ProviderTrend[]>([]);
@@ -63,11 +67,16 @@ const TrendAnalytics = () => {
       setLoading(true);
       try {
         // Fetch all reports ordered by date
-        const { data: reports } = await supabase
+        let reportsQuery = supabase
           .from("dmarc_reports")
           .select("*")
-          .eq("user_id", user.id)
-          .order("date_range_begin", { ascending: true });
+          .eq("user_id", user.id);
+
+        if (selectedDomain) {
+          reportsQuery = reportsQuery.eq("domain", selectedDomain);
+        }
+
+        const { data: reports } = await reportsQuery.order("date_range_begin", { ascending: true });
 
         if (!reports || reports.length === 0) {
           setReportCount(0);
@@ -137,7 +146,7 @@ const TrendAnalytics = () => {
     };
 
     fetchTrendData();
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const processProviderTrends = async (reports: Array<{ id: string; date_range_begin: number }>) => {
     const providerTrendMap = new Map<string, Array<{ date: string; successRate: number; emailCount: number }>>();

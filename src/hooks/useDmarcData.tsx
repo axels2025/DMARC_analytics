@@ -66,7 +66,7 @@ export interface RecentReport {
   includeInDashboard: boolean;
 }
 
-export const useDmarcData = () => {
+export const useDmarcData = (selectedDomain?: string) => {
   const { user } = useAuth();
   const [reports, setReports] = useState<DmarcReport[]>([]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
@@ -78,11 +78,16 @@ export const useDmarcData = () => {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("dmarc_reports")
         .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
+        .eq("user_id", user.id);
+
+      if (selectedDomain) {
+        query = query.eq("domain", selectedDomain);
+      }
+
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) throw error;
       setReports(data || []);
@@ -96,10 +101,16 @@ export const useDmarcData = () => {
 
     try {
       // Get total reports - fetch all first, then filter client-side for now
-      const { data: allReports } = await supabase
+      let query = supabase
         .from("dmarc_reports")
         .select("*")
         .eq("user_id", user.id);
+
+      if (selectedDomain) {
+        query = query.eq("domain", selectedDomain);
+      }
+
+      const { data: allReports } = await query;
 
       // Filter reports based on include_in_dashboard (client-side filtering)
       const includedReports = allReports?.filter(report => 
@@ -159,10 +170,16 @@ export const useDmarcData = () => {
     if (!user) return;
 
     try {
-      const { data: reports } = await supabase
+      let query = supabase
         .from("dmarc_reports")
         .select("*")
-        .eq("user_id", user.id)
+        .eq("user_id", user.id);
+
+      if (selectedDomain) {
+        query = query.eq("domain", selectedDomain);
+      }
+
+      const { data: reports } = await query
         .order("created_at", { ascending: false })
         .limit(5);
 
@@ -257,7 +274,7 @@ export const useDmarcData = () => {
       };
       loadData();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const refetch = useCallback(() => {
     if (user) {
@@ -265,7 +282,7 @@ export const useDmarcData = () => {
       fetchMetrics();
       fetchRecentReports();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   return {
     reports,

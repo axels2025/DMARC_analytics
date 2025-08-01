@@ -1,9 +1,10 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   Shield, 
   Mail, 
@@ -29,14 +30,48 @@ import SecurityMonitoring from "@/components/analytics/SecurityMonitoring";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
 import InsightsModal from "@/components/InsightsModal";
 import ExportModal from "@/components/ExportModal";
 
 const Dashboard = () => {
-  const { metrics, recentReports, loading, error, refetch } = useDmarcData();
   const { user } = useAuth();
+  const [selectedDomain, setSelectedDomain] = useState<string>("all");
+  const [availableDomains, setAvailableDomains] = useState<Array<{domain: string, count: number}>>([]);
+  const { metrics, recentReports, loading, error, refetch } = useDmarcData(selectedDomain === "all" ? undefined : selectedDomain);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+
+  // Fetch available domains
+  useEffect(() => {
+    const fetchDomains = async () => {
+      if (!user) return;
+
+      try {
+        const { data } = await supabase
+          .from("dmarc_reports")
+          .select("domain")
+          .eq("user_id", user.id);
+
+        if (data) {
+          const domainCounts = data.reduce((acc: Record<string, number>, report) => {
+            acc[report.domain] = (acc[report.domain] || 0) + 1;
+            return acc;
+          }, {});
+
+          const domains = Object.entries(domainCounts)
+            .map(([domain, count]) => ({ domain, count: count as number }))
+            .sort((a, b) => b.count - a.count);
+
+          setAvailableDomains(domains);
+        }
+      } catch (error) {
+        console.error("Failed to fetch domains:", error);
+      }
+    };
+
+    fetchDomains();
+  }, [user]);
 
   // Handle export summary click
   const handleExportSummary = () => {
@@ -100,11 +135,33 @@ const Dashboard = () => {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">DMARC Dashboard</h1>
-          <p className="text-gray-600 mt-1">
-            Monitor your email authentication and security posture
-          </p>
+        <div className="flex items-center space-x-6">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">DMARC Dashboard</h1>
+            <p className="text-gray-600 mt-1">
+              Monitor your email authentication and security posture
+            </p>
+          </div>
+          
+          {/* Domain Selector */}
+          {availableDomains.length > 0 && (
+            <div className="flex items-center space-x-3">
+              <span className="text-sm font-medium text-gray-700">Domain:</span>
+              <Select value={selectedDomain} onValueChange={setSelectedDomain}>
+                <SelectTrigger className="w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Domains ({availableDomains.reduce((sum, d) => sum + d.count, 0)} reports)</SelectItem>
+                  {availableDomains.map((domain) => (
+                    <SelectItem key={domain.domain} value={domain.domain}>
+                      {domain.domain} ({domain.count} reports)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
         <div className="flex items-center space-x-3">
           <Link to="/manage-reports">
@@ -170,7 +227,7 @@ const Dashboard = () => {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
-          <OverviewCharts />
+          <OverviewCharts selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="reports" className="space-y-6">
@@ -188,27 +245,27 @@ const Dashboard = () => {
         </TabsContent>
 
         <TabsContent value="analytics" className="space-y-6">
-          <TrendAnalytics />
+          <TrendAnalytics selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="recipients" className="space-y-6">
-          <RecipientDomains />
+          <RecipientDomains selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="auth-patterns" className="space-y-6">
-          <AuthenticationPatterns />
+          <AuthenticationPatterns selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="ip-intelligence" className="space-y-6">
-          <IPIntelligence />
+          <IPIntelligence selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="policy" className="space-y-6">
-          <PolicySimulator />
+          <PolicySimulator selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="security" className="space-y-6">
-          <SecurityMonitoring />
+          <SecurityMonitoring selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
       </Tabs>
 

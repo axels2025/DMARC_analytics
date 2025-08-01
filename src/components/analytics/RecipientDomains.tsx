@@ -18,7 +18,11 @@ interface RecipientDomainData {
   percentageOfTotal?: number;
 }
 
-const RecipientDomains = () => {
+interface RecipientDomainsProps {
+  selectedDomain?: string;
+}
+
+const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
   const { user } = useAuth();
   const [domainData, setDomainData] = useState<RecipientDomainData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,7 +34,7 @@ const RecipientDomains = () => {
       fetchRecipientDomains();
       checkForMigration();
     }
-  }, [user]);
+  }, [user, selectedDomain]);
 
   const checkForMigration = async () => {
     if (!user) return;
@@ -73,7 +77,7 @@ const RecipientDomains = () => {
   const fetchRecipientDomains = async () => {
     try {
       // Direct query since we don't have a specific RPC function yet
-      const { data: manualData, error: manualError } = await supabase
+      let recordsQuery = supabase
         .from('dmarc_records')
         .select(`
           header_from,
@@ -83,9 +87,15 @@ const RecipientDomains = () => {
           spf_result,
           created_at,
           report_id,
-          dmarc_reports!inner(user_id)
+          dmarc_reports!inner(user_id, domain)
         `)
-        .eq('dmarc_reports.user_id', user?.id);
+        .eq('dmarc_reports.user_id', user.id);
+
+      if (selectedDomain) {
+        recordsQuery = recordsQuery.eq('dmarc_reports.domain', selectedDomain);
+      }
+
+      const { data: manualData, error: manualError } = await recordsQuery;
 
       if (manualError) throw manualError;
 
