@@ -499,7 +499,15 @@ export async function exportReportAsCSV(reportId: string, userId: string): Promi
 
   const { data: records, error: recordsError } = await supabase
     .from('dmarc_records')
-    .select('*')
+    .select(`
+      *,
+      dmarc_auth_results (
+        auth_type,
+        result,
+        domain,
+        selector
+      )
+    `)
     .eq('report_id', reportId);
 
   if (recordsError) {
@@ -510,31 +518,83 @@ export async function exportReportAsCSV(reportId: string, userId: string): Promi
     throw new Error('No records available for this report');
   }
 
-  const headers = [
+  // Enhanced CSV with complete data including auth results
+  const csvLines = [];
+  
+  // Report metadata header
+  csvLines.push('DMARC REPORT DETAILS');
+  csvLines.push(`Domain,${report.domain}`);
+  csvLines.push(`Organization,${report.org_name}`);
+  csvLines.push(`Organization Email,${report.org_email || 'N/A'}`);
+  csvLines.push(`Report ID,${report.report_id}`);
+  csvLines.push(`Date Range Begin,${formatUnixDate(report.date_range_begin)}`);
+  csvLines.push(`Date Range End,${formatUnixDate(report.date_range_end)}`);
+  csvLines.push(`Policy Domain,${report.policy_domain}`);
+  csvLines.push(`Policy P,${report.policy_p}`);
+  csvLines.push(`Policy SP,${report.policy_sp || 'N/A'}`);
+  csvLines.push(`Policy PCT,${report.policy_pct}`);
+  csvLines.push(`Policy DKIM,${report.policy_dkim}`);
+  csvLines.push(`Policy SPF,${report.policy_spf}`);
+  csvLines.push('');
+  
+  // Record data headers
+  const recordHeaders = [
     'Source IP',
     'Count',
     'DKIM Result',
     'SPF Result',
     'Disposition',
     'Header From',
-    'Envelope To'
+    'Envelope To',
+    'Auth Type',
+    'Auth Result',
+    'Auth Domain',
+    'Auth Selector'
   ];
+  csvLines.push(recordHeaders.join(','));
 
-  const rows = records.map(record => [
-    record.source_ip,
-    record.count,
-    record.dkim_result,
-    record.spf_result,
-    record.disposition,
-    record.header_from,
-    record.envelope_to || 'N/A'
-  ]);
+  // Record data with auth results
+  records.forEach(record => {
+    const authResults = record.dmarc_auth_results || [];
+    
+    if (authResults.length === 0) {
+      // No auth results, show basic record data
+      const row = [
+        record.source_ip,
+        record.count,
+        record.dkim_result,
+        record.spf_result,
+        record.disposition,
+        record.header_from,
+        record.envelope_to || 'N/A',
+        'N/A',
+        'N/A',
+        'N/A',
+        'N/A'
+      ];
+      csvLines.push(row.map(cell => `"${cell}"`).join(','));
+    } else {
+      // Show record data with each auth result
+      authResults.forEach(authResult => {
+        const row = [
+          record.source_ip,
+          record.count,
+          record.dkim_result,
+          record.spf_result,
+          record.disposition,
+          record.header_from,
+          record.envelope_to || 'N/A',
+          authResult.auth_type,
+          authResult.result,
+          authResult.domain,
+          authResult.selector || 'N/A'
+        ];
+        csvLines.push(row.map(cell => `"${cell}"`).join(','));
+      });
+    }
+  });
 
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-  ].join('\n');
-
+  const csvContent = csvLines.join('\n');
   const startDate = formatUnixDate(report.date_range_begin);
   const endDate = formatUnixDate(report.date_range_end);
   const filename = `dmarc-report-${report.domain}-${startDate.replace(/[^\w]/g, '')}-${endDate.replace(/[^\w]/g, '')}.csv`;
@@ -559,7 +619,15 @@ export async function exportReportAsPDF(reportId: string, userId: string): Promi
 
   const { data: records, error: recordsError } = await supabase
     .from('dmarc_records')
-    .select('*')
+    .select(`
+      *,
+      dmarc_auth_results (
+        auth_type,
+        result,
+        domain,
+        selector
+      )
+    `)
     .eq('report_id', reportId);
 
   if (recordsError) {
@@ -580,24 +648,93 @@ export async function exportReportAsPDF(reportId: string, userId: string): Promi
         body { font-family: Arial, sans-serif; margin: 20px; color: #333; line-height: 1.6; }
         .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #2563eb; padding-bottom: 20px; }
         .header h1 { color: #2563eb; margin-bottom: 5px; font-size: 28px; }
+        .metadata { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+        .metadata-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top: 15px; }
+        .metadata-item { background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #2563eb; }
+        .metadata-item h4 { margin: 0 0 5px 0; color: #374151; font-size: 12px; text-transform: uppercase; }
+        .metadata-item p { margin: 0; font-weight: 600; color: #1f2937; }
         .summary { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
         .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 15px; }
         .summary-item { background: white; padding: 15px; border-radius: 6px; border-left: 4px solid #2563eb; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12px; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        .section { margin-bottom: 30px; }
+        .section h2 { color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 11px; }
+        th, td { padding: 6px; text-align: left; border-bottom: 1px solid #e5e7eb; }
         th { background: #f3f4f6; font-weight: 600; color: #374151; }
         .success-rate { color: #059669; font-weight: 600; }
         .failure-rate { color: #dc2626; font-weight: 600; }
+        .auth-details { font-size: 10px; color: #6b7280; }
+        @media print {
+          body { margin: 0; font-size: 10px; }
+          .header { page-break-after: avoid; }
+          table { page-break-inside: avoid; }
+        }
       </style>
     </head>
     <body>
       <div class="header">
         <h1>DMARC Report - ${report.domain}</h1>
-        <p>Report from ${report.org_name} • ${formatDateRange(report.date_range_begin, report.date_range_end)}</p>
+        <p>Comprehensive Report Details • Generated on ${new Date().toLocaleDateString()}</p>
+      </div>
+      
+      <div class="metadata">
+        <h2>Report Metadata</h2>
+        <div class="metadata-grid">
+          <div class="metadata-item">
+            <h4>Domain</h4>
+            <p>${report.domain}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Organization</h4>
+            <p>${report.org_name}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Organization Email</h4>
+            <p>${report.org_email || 'N/A'}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Report ID</h4>
+            <p>${report.report_id}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Policy Domain</h4>
+            <p>${report.policy_domain}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Date Range</h4>
+            <p>${formatDateRange(report.date_range_begin, report.date_range_end)}</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="metadata">
+        <h2>DMARC Policy Configuration</h2>
+        <div class="metadata-grid">
+          <div class="metadata-item">
+            <h4>Policy (p)</h4>
+            <p>${report.policy_p}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Subdomain Policy (sp)</h4>
+            <p>${report.policy_sp || 'Same as p'}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>Policy Percentage (pct)</h4>
+            <p>${report.policy_pct}%</p>
+          </div>
+          <div class="metadata-item">
+            <h4>DKIM Alignment</h4>
+            <p>${report.policy_dkim}</p>
+          </div>
+          <div class="metadata-item">
+            <h4>SPF Alignment</h4>
+            <p>${report.policy_spf}</p>
+          </div>
+        </div>
       </div>
       
       <div class="summary">
-        <h2>Summary</h2>
+        <h2>Email Summary</h2>
         <div class="summary-grid">
           <div class="summary-item">
             <h3>Total Emails</h3>
@@ -605,21 +742,21 @@ export async function exportReportAsPDF(reportId: string, userId: string): Promi
           </div>
           <div class="summary-item">
             <h3>Success Rate</h3>
-            <p class="success-rate">${successRate}%</p>
+            <p class="${successRate > 90 ? 'success-rate' : 'failure-rate'}">${successRate}%</p>
           </div>
           <div class="summary-item">
-            <h3>Policy</h3>
-            <p>p=${report.policy_p}</p>
+            <h3>Passed Authentication</h3>
+            <p class="success-rate">${passedEmails.toLocaleString()}</p>
           </div>
           <div class="summary-item">
-            <h3>Unique IPs</h3>
+            <h3>Unique Source IPs</h3>
             <p>${[...new Set(records?.map(r => r.source_ip) || [])].length}</p>
           </div>
         </div>
       </div>
       
-      <div>
-        <h2>Record Details</h2>
+      <div class="section">
+        <h2>Record Details with Authentication Results</h2>
         <table>
           <thead>
             <tr>
@@ -629,21 +766,65 @@ export async function exportReportAsPDF(reportId: string, userId: string): Promi
               <th>SPF</th>
               <th>Disposition</th>
               <th>Header From</th>
+              <th>Envelope To</th>
+              <th>Auth Details</th>
             </tr>
           </thead>
           <tbody>
-            ${records?.map(record => `
-              <tr>
-                <td>${record.source_ip}</td>
-                <td>${record.count.toLocaleString()}</td>
-                <td>${record.dkim_result}</td>
-                <td>${record.spf_result}</td>
-                <td>${record.disposition}</td>
-                <td>${record.header_from}</td>
-              </tr>
-            `).join('') || ''}
+            ${records?.map(record => {
+              const authResults = record.dmarc_auth_results || [];
+              const authSummary = authResults.map(auth => 
+                `${auth.auth_type}: ${auth.result} (${auth.domain}${auth.selector ? ', selector: ' + auth.selector : ''})`
+              ).join('; ') || 'No detailed auth results';
+              
+              return `
+                <tr>
+                  <td>${record.source_ip}</td>
+                  <td>${record.count.toLocaleString()}</td>
+                  <td class="${record.dkim_result === 'pass' ? 'success-rate' : 'failure-rate'}">${record.dkim_result}</td>
+                  <td class="${record.spf_result === 'pass' ? 'success-rate' : 'failure-rate'}">${record.spf_result}</td>
+                  <td>${record.disposition}</td>
+                  <td>${record.header_from}</td>
+                  <td>${record.envelope_to || 'N/A'}</td>
+                  <td class="auth-details">${authSummary}</td>
+                </tr>
+              `;
+            }).join('') || ''}
           </tbody>
         </table>
+      </div>
+      
+      ${records && records.some(r => r.dmarc_auth_results && r.dmarc_auth_results.length > 0) ? `
+      <div class="section">
+        <h2>Detailed Authentication Results</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Source IP</th>
+              <th>Auth Type</th>
+              <th>Result</th>
+              <th>Domain</th>
+              <th>Selector</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${records?.map(record => 
+              record.dmarc_auth_results?.map(auth => `
+                <tr>
+                  <td>${record.source_ip}</td>
+                  <td>${auth.auth_type}</td>
+                  <td class="${auth.result === 'pass' ? 'success-rate' : 'failure-rate'}">${auth.result}</td>
+                  <td>${auth.domain}</td>
+                  <td>${auth.selector || 'N/A'}</td>
+                </tr>
+              `).join('') || ''
+            ).join('') || ''}
+          </tbody>
+        </table>
+      </div>` : ''}
+      
+      <div style="margin-top: 40px; text-align: center; font-size: 12px; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 20px;">
+        <p>Generated by DMARC Report Dashboard • ${totalEmails.toLocaleString()} emails analyzed</p>
       </div>
     </body>
     </html>
