@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from "@/components/ui/chart";
+import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend } from "@/components/ui/chart";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, Tooltip } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from "recharts";
 import { Shield, AlertTriangle, CheckCircle, XCircle, Info, TrendingUp, TrendingDown } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface AuthPatternData {
   pattern: string;
@@ -225,6 +226,29 @@ const AuthenticationPatterns = ({ selectedDomain }: AuthenticationPatternsProps)
     },
   };
 
+  const outcomeExplanations: Record<"both" | "dkimPass" | "spfPass" | "neither", { title: string; short: string; long: string }> = {
+    both: {
+      title: "Both Pass",
+      short: "SPF and DKIM both pass (and usually align). Strongest trust signal.",
+      long: "The sender authenticated with both SPF and DKIM. As long as one of them aligns with your domain, DMARC will pass. Indicates properly configured mail sources.",
+    },
+    dkimPass: {
+      title: "DKIM Only",
+      short: "DKIM passes while SPF fails — often due to forwarding or mailing lists.",
+      long: "SPF can break when mail is forwarded or relayed, while DKIM survives content‑preserving forwarding. Ensure DKIM is aligned and applied to all providers; rotate keys and sign all streams.",
+    },
+    spfPass: {
+      title: "SPF Only",
+      short: "SPF passes while DKIM fails — mail unsigned or signature altered.",
+      long: "Messages may be missing DKIM signatures or signatures break due to content changes (footers, rewrapping). Enable DKIM on all senders and verify selectors; minimize body changes or use relaxed canonicalization.",
+    },
+    neither: {
+      title: "Both Fail",
+      short: "Neither SPF nor DKIM pass. Likely spoofing or misconfiguration.",
+      long: "Check source IPs and providers, fix SPF includes, and enable/validate DKIM. With strict DMARC (p=quarantine/reject), these are likely filtered.",
+    },
+  };
+
   return (
     <div className="space-y-6">
       {/* Educational Alert */}
@@ -345,7 +369,36 @@ const AuthenticationPatterns = ({ selectedDomain }: AuthenticationPatternsProps)
                 <XAxis dataKey="date" />
                 <YAxis />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <ChartLegend content={<ChartLegendContent />} />
+                <ChartLegend
+                  content={() => (
+                    <TooltipProvider>
+                      <div className="flex flex-wrap justify-center gap-4 mt-2">
+                        {(["both", "dkimPass", "spfPass", "neither"] as const).map((key) => (
+                          <div key={key} className="flex items-center gap-2">
+                            <div
+                              className="w-3 h-3 rounded"
+                              style={{ backgroundColor: trendChartConfig[key].color }}
+                            />
+                            <span className="text-sm">{trendChartConfig[key].label}</span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  className="inline-flex items-center text-muted-foreground"
+                                  aria-label={`What does ${trendChartConfig[key].label} mean?`}
+                                >
+                                  <Info className="h-3.5 w-3.5" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs">{outcomeExplanations[key].short}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        ))}
+                      </div>
+                    </TooltipProvider>
+                  )}
+                />
                 <Bar dataKey="both" stackId="a" fill="var(--color-both)" name="Both Pass" />
                 <Bar dataKey="dkimPass" stackId="a" fill="var(--color-dkimPass)" name="DKIM Only" />
                 <Bar dataKey="spfPass" stackId="a" fill="var(--color-spfPass)" name="SPF Only" />
@@ -355,6 +408,30 @@ const AuthenticationPatterns = ({ selectedDomain }: AuthenticationPatternsProps)
           </CardContent>
         </Card>
       </div>
+
+      {/* What these outcomes mean */}
+      <Card>
+        <CardHeader>
+          <CardTitle>What these outcomes mean</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-2">
+            {(["both", "dkimPass", "spfPass", "neither"] as const).map((key) => (
+              <div key={key} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block h-3 w-3 rounded-full"
+                    style={{ backgroundColor: trendChartConfig[key].color }}
+                    aria-hidden="true"
+                  />
+                  <h4 className="text-sm font-semibold">{outcomeExplanations[key].title}</h4>
+                </div>
+                <p className="text-sm text-muted-foreground">{outcomeExplanations[key].long}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Improvement Recommendations */}
       {errorRate > 10 && (
