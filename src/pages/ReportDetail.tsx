@@ -22,6 +22,7 @@ import {
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { detectIPProviders } from "@/utils/ipProviderDetection";
 import { exportReportAsXML, exportReportAsCSV, exportReportAsPDF } from "@/utils/exportService";
+import { migrateEnvelopeToData } from "@/utils/migrateEnvelopeTo";
 import ExportModal from "@/components/ExportModal";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -48,6 +49,7 @@ const ReportDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [extracting, setExtracting] = useState(false);
 
   // Check if user came from manage reports page
   const cameFromManageReports = location.state?.from === 'manage-reports' || 
@@ -232,6 +234,27 @@ const ReportDetail = () => {
     }
   };
 
+  const handleExtractRecipientDomains = async () => {
+    if (!user?.id || !id) {
+      toast.error('Unable to extract: missing report or user information');
+      return;
+    }
+    setExtracting(true);
+    try {
+      const res = await migrateEnvelopeToData(user.id);
+      toast.success(res.message);
+      const refreshed = await fetchReportById(id);
+      if (refreshed?.records) {
+        setReportData((prev: any) => prev ? { ...prev, report: { ...prev.report, records: refreshed.records } } : prev);
+      }
+    } catch (e) {
+      console.error('EnvelopeTo extraction failed:', e);
+      toast.error(e instanceof Error ? e.message : 'Extraction failed');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
@@ -267,6 +290,78 @@ const ReportDetail = () => {
       timeZoneName: 'short'
     });
   };
+
+  type RecipientStat = {
+    domain: string;
+    total: number;
+    inbox: number;
+    spam: number;
+    blocked: number;
+    deliveredRate: number;
+    blockedRate: number;
+    spamRate: number;
+  };
+
+  const computeRecipientStats = (records: any[]): RecipientStat[] => {
+    const map: Record<string, { total: number; inbox: number; spam: number; blocked: number }> = {};
+
+    const getDomain = (value: string): string | null => {
+      const v = String(value).trim().toLowerCase();
+      if (!v) return null;
+      if (v.includes("@")) {
+        const parts = v.split("@");
+        const d = parts[parts.length - 1];
+        return d || null;
+      }
+      // If it doesn't include @ but looks like a domain, accept it
+      if (v.includes(".")) return v;
+      return null;
+    };
+
+    records.forEach((rec: any) => {
+      if (!rec?.envelope_to) return;
+      const addresses = String(rec.envelope_to)
+        .split(/[\s,;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      addresses.forEach((addr) => {
+        const domain = getDomain(addr);
+        if (!domain) return;
+        if (!map[domain]) {
+          map[domain] = { total: 0, inbox: 0, spam: 0, blocked: 0 };
+        }
+        map[domain].total += rec.count || 0;
+        const disp = rec.disposition || "none";
+        if (disp === "reject") map[domain].blocked += rec.count || 0;
+        else if (disp === "quarantine") map[domain].spam += rec.count || 0;
+        else map[domain].inbox += rec.count || 0; // treat none as delivered
+      });
+    });
+
+    const stats: RecipientStat[] = Object.entries(map).map(([domain, vals]) => {
+      const deliveredRate = vals.total > 0 ? (vals.inbox / vals.total) * 100 : 0;
+      const blockedRate = vals.total > 0 ? (vals.blocked / vals.total) * 100 : 0;
+      const spamRate = vals.total > 0 ? (vals.spam / vals.total) * 100 : 0;
+      const round1 = (n: number) => Math.round(n * 10) / 10;
+      return {
+        domain,
+        total: vals.total,
+        inbox: vals.inbox,
+        spam: vals.spam,
+        blocked: vals.blocked,
+        deliveredRate: round1(deliveredRate),
+        blockedRate: round1(blockedRate),
+        spamRate: round1(spamRate),
+      };
+    });
+
+    return stats.sort((a, b) => b.total - a.total);
+  };
+
+  const emailRecords = reportData.report?.records || [];
+  const recipientStats = computeRecipientStats(emailRecords);
+  const hasEnvelopeData = recipientStats.length > 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-4">
@@ -560,6 +655,74 @@ const ReportDetail = () => {
         </TabsContent>
 
         <TabsContent value="details">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Recipient Domains (this report)</span>
+                <TooltipProvider>
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                        <HelpCircle className="h-4 w-4 text-gray-500" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" className="max-w-md">
+                      <div className="space-y-2 text-sm">
+                        <div className="font-semibold">How we determine delivery</div>
+                        <div>
+                          Delivered = disposition "none" (inbox), Spam = "quarantine", Blocked = "reject".
+                          Recipient domains require the optional envelope_to field in DMARC reports.
+                        </div>
+                      </div>
+                    </TooltipContent>
+                  </UITooltip>
+                </TooltipProvider>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {hasEnvelopeData ? (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-left text-gray-600">
+                        <tr>
+                          <th className="py-2 pr-2">Domain</th>
+                          <th className="py-2 pr-2 text-right">Total</th>
+                          <th className="py-2 pr-2 text-right">Delivered %</th>
+                          <th className="py-2 pr-2 text-right">Spam %</th>
+                          <th className="py-2 pr-2 text-right">Blocked %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {recipientStats.slice(0, 10).map((d: any) => (
+                          <tr key={d.domain} className="border-t">
+                            <td className="py-2 pr-2 font-medium">{d.domain}</td>
+                            <td className="py-2 pr-2 text-right">{d.total.toLocaleString()}</td>
+                            <td className="py-2 pr-2 text-right text-green-600">{d.deliveredRate}%</td>
+                            <td className="py-2 pr-2 text-right text-amber-600">{d.spamRate}%</td>
+                            <td className="py-2 pr-2 text-right text-red-600">{d.blockedRate}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {recipientStats.length > 10 && (
+                    <p className="text-xs text-gray-500 mt-2">Showing top 10 of {recipientStats.length} recipient domains.</p>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center justify-between p-3 rounded-md bg-blue-50 border border-blue-200">
+                  <div>
+                    <p className="text-sm text-blue-900 font-medium">Recipient domains unavailable</p>
+                    <p className="text-xs text-blue-800">This report likely lacks envelope_to. You can try extracting it from stored raw XML.</p>
+                  </div>
+                  <Button onClick={handleExtractRecipientDomains} disabled={extracting}>
+                    {extracting ? 'Extracting...' : 'Try to extract recipient domains'}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle>Individual Email Records</CardTitle>
