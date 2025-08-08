@@ -8,6 +8,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Mail, TrendingUp, Shield, AlertTriangle, RefreshCw, Info } from "lucide-react";
 import { migrateEnvelopeToData, checkMigrationNeeded } from "@/utils/migrateEnvelopeTo";
 import { toast } from "@/hooks/use-toast";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface RecipientDomainData {
   domain: string;
@@ -15,6 +17,7 @@ interface RecipientDomainData {
   successRate: number;
   failureCount: number;
   lastSeen: string;
+  lastSeenTs: number;
   percentageOfTotal?: number;
 }
 
@@ -28,6 +31,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
   const [loading, setLoading] = useState(true);
   const [migrationNeeded, setMigrationNeeded] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  const [sortMode, setSortMode] = useState<"volume" | "latest">("volume");
 
   useEffect(() => {
     if (user) {
@@ -138,10 +142,10 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
           emailCount: entry.emailCount,
           successRate: entry.emailCount > 0 ? Math.round((entry.successCount / entry.emailCount) * 100) : 0,
           failureCount: entry.failureCount,
-          lastSeen: new Date(entry.lastSeen).toLocaleDateString()
+          lastSeen: new Date(entry.lastSeen).toLocaleDateString(),
+          lastSeenTs: new Date(entry.lastSeen).getTime()
         }))
-        .sort((a, b) => b.emailCount - a.emailCount)
-        .slice(0, 10);
+        .sort((a, b) => b.emailCount - a.emailCount);
 
       // Calculate total emails for percentage calculation
       const totalEmails = processedData.reduce((sum, domain) => sum + domain.emailCount, 0);
@@ -210,7 +214,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
     );
   }
 
-  const topDomains = domainData.slice(0, 5);
+  const sortedDomains = [...domainData].sort((a, b) => sortMode === "volume" ? b.emailCount - a.emailCount : b.lastSeenTs - a.lastSeenTs);
   const chartData = domainData.slice(0, 8);
 
   return (
@@ -296,41 +300,55 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Domains List */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Mail className="w-5 h-5" />
               Top Recipient Domains
             </CardTitle>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Sort by</span>
+              <Select value={sortMode} onValueChange={(v) => setSortMode(v as "volume" | "latest")}>
+                <SelectTrigger className="h-8 w-[140px]">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value="volume">Volume</SelectItem>
+                  <SelectItem value="latest">Latest activity</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {topDomains.map((domain, index) => (
-                <div key={domain.domain} className="flex items-center justify-between p-3 border rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium">
-                      {index + 1}
-                    </div>
-                    <div>
-                      <p className="font-medium">{domain.domain}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {domain.emailCount.toLocaleString()} emails ({domain.percentageOfTotal}%) • Last seen: {domain.lastSeen}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant={getSuccessRateVariant(domain.successRate)}>
-                      {domain.successRate}%
-                    </Badge>
-                    {domain.successRate < 70 && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <Shield className="w-3 h-3 text-red-500" />
-                        <span className="text-xs text-red-500">Needs attention</span>
+            <ScrollArea className="h-80 pr-2">
+              <div className="space-y-4">
+                {sortedDomains.map((domain, index) => (
+                  <div key={domain.domain} className="flex items-center justify-between p-3 border rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium">
+                        {index + 1}
                       </div>
-                    )}
+                      <div>
+                        <p className="font-medium">{domain.domain}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {domain.emailCount.toLocaleString()} emails ({domain.percentageOfTotal}%) • Last seen: {domain.lastSeen}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <Badge variant={getSuccessRateVariant(domain.successRate)}>
+                        {domain.successRate}%
+                      </Badge>
+                      {domain.successRate < 70 && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <Shield className="w-3 h-3 text-red-500" />
+                          <span className="text-xs text-red-500">Needs attention</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </ScrollArea>
           </CardContent>
         </Card>
 
@@ -371,31 +389,6 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
         </Card>
       </div>
 
-      {/* All Domains Table */}
-      {domainData.length > 5 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>All Recipient Domains</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {domainData.slice(5).map((domain) => (
-                <div key={domain.domain} className="flex items-center justify-between p-2 border rounded">
-                  <div>
-                    <p className="font-medium text-sm">{domain.domain}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {domain.emailCount.toLocaleString()} emails
-                    </p>
-                  </div>
-                  <Badge variant={getSuccessRateVariant(domain.successRate)} className="text-xs">
-                    {domain.successRate}%
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 };
