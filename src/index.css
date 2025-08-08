@@ -47,6 +47,13 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Chart palette (light) */
+    --chart-1: 0 84% 60%;
+    --chart-2: 142 71% 45%;
+    --chart-3: 47 95% 53%;
+    --chart-4: 221.2 83.2% 53.3%;
+    --chart-5: 262 83% 62%;
   }
 
   .dark {
@@ -85,6 +92,13 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+    
+    /* Chart palette (dark) */
+    --chart-1: 0 72% 51%;
+    --chart-2: 142 76% 36%;
+    --chart-3: 45 86% 55%;
+    --chart-4: 217.2 91.2% 59.8%;
+    --chart-5: 263 85% 67%;
   }
 }
 
