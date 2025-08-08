@@ -27,6 +27,9 @@ import AuthenticationPatterns from "@/components/analytics/AuthenticationPattern
 import IPIntelligence from "@/components/analytics/IPIntelligence";
 import PolicySimulator from "@/components/analytics/PolicySimulator";
 import SecurityMonitoring from "@/components/analytics/SecurityMonitoring";
+import DkimSelectorExplorer from "@/components/analytics/DkimSelectorExplorer";
+import SpfDomainExplorer from "@/components/analytics/SpfDomainExplorer";
+import AlignmentDashboard from "@/components/analytics/AlignmentDashboard";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
 import { useAuth } from "@/hooks/useAuth";
