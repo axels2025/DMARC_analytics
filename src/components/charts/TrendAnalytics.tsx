@@ -47,6 +47,14 @@ interface TopSourceIP {
   rate: number;
 }
 
+interface DispositionTrend {
+  date: string;
+  none: number;
+  quarantine: number;
+  reject: number;
+  total: number;
+}
+
 interface TrendAnalyticsProps {
   selectedDomain?: string;
 }
@@ -56,6 +64,7 @@ const TrendAnalytics = ({ selectedDomain }: TrendAnalyticsProps) => {
   const [trendData, setTrendData] = useState<TrendData[]>([]);
   const [providerTrends, setProviderTrends] = useState<ProviderTrend[]>([]);
   const [topSourceIPs, setTopSourceIPs] = useState<TopSourceIP[]>([]);
+  const [dispositionTrend, setDispositionTrend] = useState<DispositionTrend[]>([]);
   const [loading, setLoading] = useState(true);
   const [reportCount, setReportCount] = useState(0);
   const [activeTab, setActiveTab] = useState('success-trends');
@@ -90,20 +99,30 @@ const TrendAnalytics = ({ selectedDomain }: TrendAnalyticsProps) => {
         const trendPromises = reports.map(async (report) => {
           const { data: records } = await supabase
             .from("dmarc_records")
-            .select("count, dkim_result, spf_result, source_ip")
+            .select("count, dkim_result, spf_result, source_ip, disposition")
             .eq("report_id", report.id);
 
           if (!records || records.length === 0) {
+            const dateLabel = new Date(report.date_range_begin * 1000).toLocaleDateString('en-US', { 
+              month: 'short', 
+              day: 'numeric' 
+            });
             return {
-              date: new Date(report.date_range_begin * 1000).toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric' 
-              }),
-              successRate: 0,
-              totalEmails: 0,
-              failedEmails: 0,
-              reportCount: 1,
-              domain: report.domain
+              trend: {
+                date: dateLabel,
+                successRate: 0,
+                totalEmails: 0,
+                failedEmails: 0,
+                reportCount: 1,
+                domain: report.domain
+              },
+              disp: {
+                date: dateLabel,
+                none: 0,
+                quarantine: 0,
+                reject: 0,
+                total: 0
+              }
             };
           }
 
@@ -114,21 +133,40 @@ const TrendAnalytics = ({ selectedDomain }: TrendAnalyticsProps) => {
           const failedEmails = totalEmails - passedEmails;
           const successRate = totalEmails > 0 ? Math.round((passedEmails / totalEmails) * 100 * 10) / 10 : 0;
 
+          const dispCounts = records.reduce((acc: any, r: any) => {
+            const d = (r.disposition || 'none').toLowerCase();
+            if (!acc[d]) acc[d] = 0;
+            acc[d] += r.count;
+            return acc;
+          }, { none: 0, quarantine: 0, reject: 0 } as Record<string, number>);
+
+          const dateLabel = new Date(report.date_range_begin * 1000).toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric' 
+          });
+
           return {
-            date: new Date(report.date_range_begin * 1000).toLocaleDateString('en-US', { 
-              month: 'short', 
-              day: 'numeric' 
-            }),
-            successRate,
-            totalEmails,
-            failedEmails,
-            reportCount: 1,
-            domain: report.domain
+            trend: {
+              date: dateLabel,
+              successRate,
+              totalEmails,
+              failedEmails,
+              reportCount: 1,
+              domain: report.domain
+            },
+            disp: {
+              date: dateLabel,
+              none: dispCounts.none || 0,
+              quarantine: dispCounts.quarantine || 0,
+              reject: dispCounts.reject || 0,
+              total: totalEmails
+            }
           };
         });
 
-        const resolvedTrendData = await Promise.all(trendPromises);
-        setTrendData(resolvedTrendData);
+        const resolved = await Promise.all(trendPromises);
+        setTrendData(resolved.map(r => r.trend));
+        setDispositionTrend(resolved.map(r => r.disp));
 
         // Process provider trends
         if (reports.length >= 2) {
@@ -395,6 +433,27 @@ const TrendAnalytics = ({ selectedDomain }: TrendAnalyticsProps) => {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>DMARC Disposition Over Time</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={dispositionTrend}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" />
+                  <YAxis />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend />
+                  <Bar dataKey="none" stackId="a" fill="#10b981" name="p=none (delivered)" />
+                  <Bar dataKey="quarantine" stackId="a" fill="#f59e0b" name="p=quarantine" />
+                  <Bar dataKey="reject" stackId="a" fill="#ef4444" name="p=reject" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
         </TabsContent>
 
         <TabsContent value="provider-trends" className="space-y-6">

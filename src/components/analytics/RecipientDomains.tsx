@@ -19,6 +19,10 @@ interface RecipientDomainData {
   lastSeen: string;
   lastSeenTs: number;
   percentageOfTotal?: number;
+  delivered: number;
+  quarantined: number;
+  rejected: number;
+  blockedRate: number;
 }
 
 interface RecipientDomainsProps {
@@ -31,7 +35,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
   const [loading, setLoading] = useState(true);
   const [migrationNeeded, setMigrationNeeded] = useState(false);
   const [migrating, setMigrating] = useState(false);
-  const [sortMode, setSortMode] = useState<"volume" | "latest">("volume");
+  const [sortMode, setSortMode] = useState<"volume" | "latest" | "blocked">("volume");
 
   useEffect(() => {
     if (user) {
@@ -89,6 +93,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
           count,
           dkim_result,
           spf_result,
+          disposition,
           created_at,
           report_id,
           dmarc_reports!inner(user_id, domain)
@@ -107,10 +112,10 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
       const domainMap = new Map<string, any>();
       
       manualData?.forEach(record => {
-        // Only use envelope_to (recipient domain) - skip records without it
         if (!record.envelope_to) return;
         const domain = record.envelope_to;
         const isSuccess = (record.dkim_result === 'pass' || record.spf_result === 'pass');
+        const disp = (record.disposition || 'none').toLowerCase();
         
         if (!domainMap.has(domain)) {
           domainMap.set(domain, {
@@ -118,6 +123,9 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
             emailCount: 0,
             successCount: 0,
             failureCount: 0,
+            delivered: 0,
+            quarantined: 0,
+            rejected: 0,
             lastSeen: record.created_at
           });
         }
@@ -131,6 +139,10 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
           entry.failureCount += record.count;
         }
         
+        if (disp === 'reject') entry.rejected += record.count;
+        else if (disp === 'quarantine') entry.quarantined += record.count;
+        else entry.delivered += record.count;
+        
         if (new Date(record.created_at) > new Date(entry.lastSeen)) {
           entry.lastSeen = record.created_at;
         }
@@ -143,7 +155,11 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
           successRate: entry.emailCount > 0 ? Math.round((entry.successCount / entry.emailCount) * 100) : 0,
           failureCount: entry.failureCount,
           lastSeen: new Date(entry.lastSeen).toLocaleDateString(),
-          lastSeenTs: new Date(entry.lastSeen).getTime()
+          lastSeenTs: new Date(entry.lastSeen).getTime(),
+          delivered: entry.delivered,
+          quarantined: entry.quarantined,
+          rejected: entry.rejected,
+          blockedRate: entry.emailCount > 0 ? Math.round((entry.rejected / entry.emailCount) * 100) : 0,
         }))
         .sort((a, b) => b.emailCount - a.emailCount);
 
@@ -214,7 +230,11 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
     );
   }
 
-  const sortedDomains = [...domainData].sort((a, b) => sortMode === "volume" ? b.emailCount - a.emailCount : b.lastSeenTs - a.lastSeenTs);
+  const sortedDomains = [...domainData].sort((a, b) => {
+    if (sortMode === "volume") return b.emailCount - a.emailCount;
+    if (sortMode === "blocked") return b.blockedRate - a.blockedRate;
+    return b.lastSeenTs - a.lastSeenTs;
+  });
   const chartData = domainData.slice(0, 8);
 
   return (
@@ -314,6 +334,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
                 <SelectContent align="end">
                   <SelectItem value="volume">Volume</SelectItem>
                   <SelectItem value="latest">Latest activity</SelectItem>
+                  <SelectItem value="blocked">Blocked rate</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -338,12 +359,33 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
                       <Badge variant={getSuccessRateVariant(domain.successRate)}>
                         {domain.successRate}%
                       </Badge>
-                      {domain.successRate < 70 && (
-                        <div className="flex items-center gap-1 mt-1">
-                          <Shield className="w-3 h-3 text-red-500" />
-                          <span className="text-xs text-red-500">Needs attention</span>
-                        </div>
-                      )}
+                      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground justify-end">
+                        <span>Blocked: {domain.blockedRate}%</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <div className="w-full h-2 bg-muted rounded overflow-hidden">
+                      <div
+                        className="h-full bg-green-500/80"
+                        style={{ width: `${Math.min(100, Math.max(0, (domain.delivered / domain.emailCount) * 100))}%` }}
+                        aria-label="Delivered"
+                      />
+                      <div
+                        className="h-full bg-amber-500/80"
+                        style={{ width: `${Math.min(100, Math.max(0, (domain.quarantined / domain.emailCount) * 100))}%` }}
+                        aria-label="Quarantine"
+                      />
+                      <div
+                        className="h-full bg-red-500/80"
+                        style={{ width: `${Math.min(100, Math.max(0, (domain.rejected / domain.emailCount) * 100))}%` }}
+                        aria-label="Reject"
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Delivered {domain.delivered.toLocaleString()}</span>
+                      <span>Quarantine {domain.quarantined.toLocaleString()}</span>
+                      <span>Reject {domain.rejected.toLocaleString()}</span>
                     </div>
                   </div>
                 ))}

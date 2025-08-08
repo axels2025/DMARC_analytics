@@ -17,7 +17,8 @@ import {
   AlertTriangle,
   Download,
   Loader,
-  HelpCircle
+  HelpCircle,
+  Copy
 } from "lucide-react";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { detectIPProviders } from "@/utils/ipProviderDetection";
@@ -387,6 +388,38 @@ const ReportDetail = () => {
                     <Calendar className="w-3 h-3 mr-1" />
                     {formatTime(reportData.report.date_range_begin)} - {formatTime(reportData.report.date_range_end)}
                   </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-gray-700">
+                  {reportData.report.org_email && (
+                    <div className="flex items-center gap-2">
+                      <span>Reporter: {reportData.report.org_email}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(reportData.report.org_email);
+                          toast.success("Reporter email copied to clipboard");
+                        }}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+                  {reportData.report.report_id && (
+                    <div className="flex items-center gap-2">
+                      <span>Report ID: {reportData.report.report_id}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(reportData.report.report_id);
+                          toast.success("Report ID copied to clipboard");
+                        }}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
