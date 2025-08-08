@@ -256,7 +256,12 @@ const Dashboard = () => {
         </TabsContent>
 
         <TabsContent value="auth-patterns" className="space-y-6">
+          <AlignmentDashboard selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
           <AuthenticationPatterns selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <DkimSelectorExplorer selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
+            <SpfDomainExplorer selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
+          </div>
         </TabsContent>
 
         <TabsContent value="ip-intelligence" className="space-y-6">
