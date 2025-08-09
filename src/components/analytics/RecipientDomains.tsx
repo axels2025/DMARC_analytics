@@ -327,7 +327,7 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
             </CardTitle>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Sort by</span>
-              <Select value={sortMode} onValueChange={(v) => setSortMode(v as "volume" | "latest")}>
+              <Select value={sortMode} onValueChange={(v) => setSortMode(v as "volume" | "latest" | "blocked")}>
                 <SelectTrigger className="h-8 w-[140px]">
                   <SelectValue placeholder="Sort by" />
                 </SelectTrigger>
@@ -343,49 +343,51 @@ const RecipientDomains = ({ selectedDomain }: RecipientDomainsProps) => {
             <ScrollArea className="h-80 pr-2">
               <div className="space-y-4">
                 {sortedDomains.map((domain, index) => (
-                  <div key={domain.domain} className="flex items-center justify-between p-3 border rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium">
-                        {index + 1}
+                  <div key={domain.domain} className="space-y-3">
+                    <div className="flex items-center justify-between p-3 border rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium">
+                          {index + 1}
+                        </div>
+                        <div>
+                          <p className="font-medium">{domain.domain}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {domain.emailCount.toLocaleString()} emails ({domain.percentageOfTotal}%) • Last seen: {domain.lastSeen}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium">{domain.domain}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {domain.emailCount.toLocaleString()} emails ({domain.percentageOfTotal}%) • Last seen: {domain.lastSeen}
-                        </p>
+                      <div className="text-right">
+                        <Badge variant={getSuccessRateVariant(domain.successRate)}>
+                          {domain.successRate}%
+                        </Badge>
+                        <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground justify-end">
+                          <span>Blocked: {domain.blockedRate}%</span>
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <Badge variant={getSuccessRateVariant(domain.successRate)}>
-                        {domain.successRate}%
-                      </Badge>
-                      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground justify-end">
-                        <span>Blocked: {domain.blockedRate}%</span>
+                    <div className="mt-3">
+                      <div className="w-full h-2 bg-muted rounded overflow-hidden">
+                        <div
+                          className="h-full bg-green-500/80"
+                          style={{ width: `${Math.min(100, Math.max(0, (domain.delivered / domain.emailCount) * 100))}%` }}
+                          aria-label="Delivered"
+                        />
+                        <div
+                          className="h-full bg-amber-500/80"
+                          style={{ width: `${Math.min(100, Math.max(0, (domain.quarantined / domain.emailCount) * 100))}%` }}
+                          aria-label="Quarantine"
+                        />
+                        <div
+                          className="h-full bg-red-500/80"
+                          style={{ width: `${Math.min(100, Math.max(0, (domain.rejected / domain.emailCount) * 100))}%` }}
+                          aria-label="Reject"
+                        />
                       </div>
-                    </div>
-                  </div>
-                  <div className="mt-3">
-                    <div className="w-full h-2 bg-muted rounded overflow-hidden">
-                      <div
-                        className="h-full bg-green-500/80"
-                        style={{ width: `${Math.min(100, Math.max(0, (domain.delivered / domain.emailCount) * 100))}%` }}
-                        aria-label="Delivered"
-                      />
-                      <div
-                        className="h-full bg-amber-500/80"
-                        style={{ width: `${Math.min(100, Math.max(0, (domain.quarantined / domain.emailCount) * 100))}%` }}
-                        aria-label="Quarantine"
-                      />
-                      <div
-                        className="h-full bg-red-500/80"
-                        style={{ width: `${Math.min(100, Math.max(0, (domain.rejected / domain.emailCount) * 100))}%` }}
-                        aria-label="Reject"
-                      />
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Delivered {domain.delivered.toLocaleString()}</span>
-                      <span>Quarantine {domain.quarantined.toLocaleString()}</span>
-                      <span>Reject {domain.rejected.toLocaleString()}</span>
+                      <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Delivered {domain.delivered.toLocaleString()}</span>
+                        <span>Quarantine {domain.quarantined.toLocaleString()}</span>
+                        <span>Reject {domain.rejected.toLocaleString()}</span>
+                      </div>
                     </div>
                   </div>
                 ))}
