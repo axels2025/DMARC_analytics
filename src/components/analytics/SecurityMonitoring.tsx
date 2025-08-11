@@ -1,12 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area, BarChart, Bar } from "recharts";
-import { Shield, AlertTriangle, TrendingUp, Mail, Users, Clock } from "lucide-react";
-
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, AreaChart, Area, BarChart, Bar, Legend } from "recharts";
+import { Shield, AlertTriangle, TrendingUp, Mail, Users, Clock, Info } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Textarea } from "@/components/ui/textarea";
+import { fetchTrustedRules, setTrustLevel, clearTrustLevel, type TrustedRule } from "@/utils/ipIntelligence";
+import { toast } from "@/hooks/use-toast";
 interface SecurityEvent {
   id: string;
   type: 'spoofing' | 'volume_spike' | 'new_ip' | 'auth_failure';
@@ -43,6 +49,21 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
   const [threatTrends, setThreatTrends] = useState<ThreatData[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Whitelist manager state
+  const [trustedRules, setTrustedRules] = useState<TrustedRule[]>([]);
+  const [selectedRuleIds, setSelectedRuleIds] = useState<Set<string>>(new Set());
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteEditingRule, setNoteEditingRule] = useState<TrustedRule | null>(null);
+  const [noteValue, setNoteValue] = useState("");
+
+  // Derived colors using design tokens
+  const threatColor = useMemo(() => {
+    if (!metrics) return "";
+    if (metrics.threatScore >= 70) return "hsl(var(--destructive))";
+    if (metrics.threatScore >= 40) return "hsl(var(--chart-3))"; // warning
+    return "hsl(var(--chart-2))"; // low/green
+  }, [metrics]);
   useEffect(() => {
     if (user) {
       fetchSecurityData();
@@ -214,15 +235,110 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
     }
   };
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'high': return 'hsl(var(--chart-1))';
-      case 'medium': return 'hsl(var(--chart-3))';
-      case 'low': return 'hsl(var(--chart-2))';
-      default: return 'hsl(var(--muted))';
+  // Whitelist management helpers
+  const getRuleKey = (r: TrustedRule) => (r as any).id ?? `${(r as any).domain}:${(r as any).ip_address ?? (r as any).ip_range}`;
+  const getRuleDisplayIp = (r: TrustedRule) => ((r as any).ip_address ?? (r as any).ip_range ?? '') as string;
+
+  const loadTrusted = async () => {
+    if (!user || !selectedDomain) {
+      setTrustedRules([]);
+      return;
+    }
+    setRulesLoading(true);
+    try {
+      const rules = await fetchTrustedRules(user.id, selectedDomain);
+      setTrustedRules(rules);
+    } catch (e) {
+      console.error('Error loading trusted rules:', e);
+    } finally {
+      setRulesLoading(false);
     }
   };
 
+  useEffect(() => {
+    if (user) {
+      loadTrusted();
+    }
+  }, [user, selectedDomain]);
+
+  const toggleAll = (checked: boolean) => {
+    if (checked) setSelectedRuleIds(new Set(trustedRules.map(getRuleKey)));
+    else setSelectedRuleIds(new Set());
+  };
+
+  const toggleOne = (id: string, checked: boolean) => {
+    setSelectedRuleIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
+  const updateTrust = async (targets: TrustedRule[], trust: 'trusted' | 'blocked') => {
+    if (!user || !selectedDomain) return;
+    for (const r of targets) {
+      const target = getRuleDisplayIp(r);
+      await setTrustLevel(user.id, selectedDomain, target, trust, (r as any).notes ?? undefined);
+    }
+    await loadTrusted();
+    toast({ title: trust === 'trusted' ? 'Marked as Trusted' : 'Marked as Blocked', description: `${targets.length} rule(s) updated.` });
+    setSelectedRuleIds(new Set());
+  };
+
+  const removeRules = async (targets: TrustedRule[]) => {
+    if (!user || !selectedDomain) return;
+    for (const r of targets) {
+      const target = getRuleDisplayIp(r);
+      await clearTrustLevel(user.id, selectedDomain, target);
+    }
+    await loadTrusted();
+    toast({ title: 'Removed', description: `${targets.length} rule(s) removed.` });
+    setSelectedRuleIds(new Set());
+  };
+
+  const openNoteEditor = (r: TrustedRule) => {
+    setNoteEditingRule(r);
+    setNoteValue(((r as any).notes ?? '') as string);
+    setNoteOpen(true);
+  };
+
+  const saveNote = async () => {
+    if (!user || !selectedDomain || !noteEditingRule) return;
+    const trust = ((noteEditingRule as any).trust_level ?? 'trusted') as 'trusted' | 'blocked';
+    const target = getRuleDisplayIp(noteEditingRule);
+    await setTrustLevel(user.id, selectedDomain, target, trust, noteValue);
+    setNoteOpen(false);
+    setNoteEditingRule(null);
+    setNoteValue('');
+    await loadTrusted();
+    toast({ title: 'Note saved' });
+  };
+
+  const getRiskExplanation = (severity: 'low' | 'medium' | 'high') => {
+    switch (severity) {
+      case 'high':
+        return 'Active attack indicators (spoofing or massive spikes). Act immediately.';
+      case 'medium':
+        return 'Suspicious behavior (auth failures, new IPs). Investigate and trust/block.';
+      default:
+        return 'Minor anomalies. Monitor and review periodically.';
+    }
+  };
+
+  const getEventExplanation = (type: SecurityEvent['type']) => {
+    switch (type) {
+      case 'spoofing':
+        return 'Sender domain mismatches your policy domain. Tighten DMARC and verify sources.';
+      case 'auth_failure':
+        return 'DKIM/SPF failed. Fix DNS/auth config or block if unauthorized.';
+      case 'new_ip':
+        return 'First time we see this IP. Verify sender and mark as Trusted or Blocked.';
+      case 'volume_spike':
+        return 'Sudden surge from an IP. Investigate campaign or potential compromise.';
+      default:
+        return 'Security-relevant activity detected.';
+    }
+  };
   const getSeverityVariant = (severity: string): "default" | "secondary" | "destructive" => {
     switch (severity) {
       case 'high': return 'destructive';
@@ -350,14 +466,15 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" />
                   <YAxis />
-                  <Tooltip />
+                  <RechartsTooltip />
+                  <Legend verticalAlign="top" align="right" />
                   <Area 
                     type="monotone" 
                     dataKey="spoofingAttempts" 
                     stackId="1"
                     stroke="hsl(var(--chart-1))" 
                     fill="hsl(var(--chart-1))" 
-                    name="Spoofing"
+                    name="Spoofing Attempts"
                   />
                   <Area 
                     type="monotone" 
@@ -365,7 +482,7 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
                     stackId="1"
                     stroke="hsl(var(--chart-3))" 
                     fill="hsl(var(--chart-3))" 
-                    name="Auth Failures"
+                    name="Authentication Failures"
                   />
                   <Area 
                     type="monotone" 
