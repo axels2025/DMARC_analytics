@@ -6,8 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
-import { Settings, AlertTriangle, Target, TrendingUp, Mail, Shield, CheckCircle, XCircle } from "lucide-react";
-
+import { Settings, AlertTriangle, Target, TrendingUp, Mail, Shield, CheckCircle, XCircle, Info } from "lucide-react";
+import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 interface PolicySimulatorProps {
   selectedDomain?: string;
 }
@@ -166,6 +166,8 @@ const PolicySimulator = ({ selectedDomain }: PolicySimulatorProps) => {
     }
   };
 
+  const normalizeAlignment = (v?: string) => (v === 'r' ? 'relaxed' : v === 's' ? 'strict' : (v || 'relaxed'));
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -234,32 +236,124 @@ const PolicySimulator = ({ selectedDomain }: PolicySimulatorProps) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Policy (p)</p>
-              <Badge variant={policyData.currentPolicy.p === 'none' ? 'secondary' : 'default'}>
-                {policyData.currentPolicy.p}
-              </Badge>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Percentage</p>
-              <p className="text-lg font-bold">{policyData.currentPolicy.pct}%</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">DKIM Mode</p>
-              <Badge variant="outline">{policyData.currentPolicy.dkim}</Badge>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">SPF Mode</p>
-              <Badge variant="outline">{policyData.currentPolicy.spf}</Badge>
-            </div>
-            {policyData.currentPolicy.sp && (
+          <TooltipProvider delayDuration={150}>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Subdomain Policy</p>
-                <Badge variant="outline">{policyData.currentPolicy.sp}</Badge>
+                <p className="text-sm font-medium text-muted-foreground">Policy (p)</p>
+                <div className="flex items-center gap-1">
+                  <Badge variant={policyData.currentPolicy.p === 'none' ? 'secondary' : 'default'}>
+                    {policyData.currentPolicy.p}
+                  </Badge>
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+                        aria-label="About DMARC policy (p)"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="max-w-xs">
+                        DMARC policy action for failing messages: none (monitor), quarantine (send to spam), reject (block).
+                      </div>
+                    </TooltipContent>
+                  </UITooltip>
+                </div>
               </div>
-            )}
-          </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Percentage</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-lg font-bold">{policyData.currentPolicy.pct}%</p>
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+                        aria-label="About DMARC pct"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="max-w-xs">
+                        pct: Percentage of messages the policy applies to. Use lower values for gradual rollout.
+                      </div>
+                    </TooltipContent>
+                  </UITooltip>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">DKIM Mode</p>
+                <div className="flex items-center gap-1">
+                  <Badge variant="outline">{normalizeAlignment(policyData.currentPolicy.dkim)}</Badge>
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+                        aria-label="About adkim"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="max-w-xs">
+                        DKIM alignment mode (adkim): relaxed (r) allows subdomains; strict (s) requires exact domain match.
+                      </div>
+                    </TooltipContent>
+                  </UITooltip>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">SPF Mode</p>
+                <div className="flex items-center gap-1">
+                  <Badge variant="outline">{normalizeAlignment(policyData.currentPolicy.spf)}</Badge>
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+                        aria-label="About aspf"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="max-w-xs">
+                        SPF alignment mode (aspf): relaxed (r) allows subdomains; strict (s) requires exact domain match.
+                      </div>
+                    </TooltipContent>
+                  </UITooltip>
+                </div>
+              </div>
+              {policyData.currentPolicy.sp && (
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Subdomain Policy</p>
+                  <div className="flex items-center gap-1">
+                    <Badge variant="outline">{policyData.currentPolicy.sp}</Badge>
+                    <UITooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="inline-flex items-center text-muted-foreground/80 hover:text-foreground transition-colors"
+                          aria-label="About DMARC subdomain policy (sp)"
+                        >
+                          <Info className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <div className="max-w-xs">
+                          Policy for subdomains (sp). If not set, subdomains inherit the main policy (p).
+                        </div>
+                      </TooltipContent>
+                    </UITooltip>
+                  </div>
+                </div>
+              )}
+            </div>
+          </TooltipProvider>
         </CardContent>
       </Card>
 
