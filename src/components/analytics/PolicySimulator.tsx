@@ -198,6 +198,31 @@ const PolicySimulator = ({ selectedDomain }: PolicySimulatorProps) => {
     { name: 'Neither', value: policyData.alignmentAnalysis.neitherAligned, color: 'hsl(var(--chart-1))' }
   ];
 
+  // Custom pie label renderer to avoid overlap for small slices
+  const RADIAN = Math.PI / 180;
+  const renderAlignmentLabel = (props: any) => {
+    const { cx, cy, midAngle, outerRadius, percent, payload, index } = props;
+    const radius = outerRadius + 14;
+    let x = cx + radius * Math.cos(-midAngle * RADIAN);
+    let y = cy + radius * Math.sin(-midAngle * RADIAN);
+    if (percent < 0.06) {
+      y += index % 2 === 0 ? -10 : 10;
+    }
+    const label = `${payload.name}: ${Number(payload.value).toLocaleString()}`;
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="hsl(var(--foreground))"
+        textAnchor={x > cx ? 'start' : 'end'}
+        dominantBaseline="central"
+        fontSize={12}
+      >
+        {label}
+      </text>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Current Policy Status */}
@@ -367,9 +392,11 @@ const PolicySimulator = ({ selectedDomain }: PolicySimulatorProps) => {
                         data={alignmentChartData}
                         cx="50%"
                         cy="50%"
-                        outerRadius={80}
+                        outerRadius={84}
                         dataKey="value"
-                        label={({ name, value }) => `${name}: ${value}`}
+                        paddingAngle={2}
+                        label={renderAlignmentLabel}
+                        labelLine={{ stroke: 'hsl(var(--muted-foreground))', strokeWidth: 1 }}
                       >
                         {alignmentChartData.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={entry.color} />
