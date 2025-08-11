@@ -50,40 +50,55 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
 
   const fetchIPIntelligence = async () => {
     try {
-      let recordsQuery = supabase
-        .from('dmarc_records')
-        .select(`
-          source_ip,
-          count,
-          dkim_result,
-          spf_result,
-          created_at,
-          dmarc_reports!inner(user_id, domain)
-        `)
-        .eq('dmarc_reports.user_id', user?.id);
+      // 1) Fetch reports for this user (and optional domain)
+      const reportsQuery = supabase
+        .from('dmarc_reports')
+        .select('id, domain')
+        .eq('user_id', user!.id);
 
-      if (selectedDomain) {
-        recordsQuery = recordsQuery.eq('dmarc_reports.domain', selectedDomain);
+      const { data: reports, error: reportsError } = selectedDomain
+        ? await reportsQuery.eq('domain', selectedDomain)
+        : await reportsQuery;
+
+      if (reportsError) throw reportsError;
+      const reportIds = (reports || []).map((r: any) => r.id);
+      if (reportIds.length === 0) {
+        setIpData([]);
+        setGeoData([]);
+        return;
       }
 
-      const { data, error } = await recordsQuery;
+      // 2) Fetch records for those reports
+      const { data: records, error: recordsError } = await supabase
+        .from('dmarc_records')
+        .select('source_ip, count, dkim_result, spf_result, created_at, report_id')
+        .in('report_id', reportIds);
 
-      if (error) throw error;
+      if (recordsError) throw recordsError;
+
+      // Helper to normalize IPs (strip CIDR if present)
+      const normalizeIP = (ip: string) => ip?.toString().split('/')?.[0]?.trim() || ip;
 
       // Process IP data with real geolocation
       const ipMap = new Map<string, any>();
       const countryMap = new Map<string, any>();
 
       // Resolve unique IP geolocations with caching
-      const uniqueIps = Array.from(new Set((data || []).map((r: any) => r.source_ip as string)));
-      const locEntries = await Promise.all(uniqueIps.map(async (ip) => {
-        const loc = await getIPLocation(ip).catch(() => ({ country: 'Unknown', city: null }));
-        return [ip, loc] as const;
-      }));
-      const locMap = new Map<string, any>(locEntries);
+      const uniqueIps = Array.from(new Set((records || []).map((r: any) => normalizeIP(r.source_ip as string))));
 
-      (data || []).forEach((record: any) => {
-        const ip = record.source_ip as string;
+      const locMap = new Map<string, any>();
+      // Sequential fetch to be gentle with rate limits; cached hits are instant
+      for (const ip of uniqueIps) {
+        try {
+          const loc = await getIPLocation(ip);
+          locMap.set(ip, loc);
+        } catch {
+          locMap.set(ip, { country: 'Unknown', city: null });
+        }
+      }
+
+      (records || []).forEach((record: any) => {
+        const ip = normalizeIP(record.source_ip as string);
         const isSuccess = (record.dkim_result === 'pass' || record.spf_result === 'pass');
 
         const loc = locMap.get(ip) || { country: 'Unknown', city: null };
@@ -158,6 +173,8 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
       setGeoData(processedCountries);
     } catch (error) {
       console.error('Error fetching IP intelligence:', error);
+      setIpData([]);
+      setGeoData([]);
     } finally {
       setLoading(false);
     }
@@ -294,31 +311,35 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {ipData.slice(0, 10).map((ip) => (
-                <div 
-                  key={ip.ip} 
-                  className="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-muted/50"
-                  onClick={() => setSelectedIP(ip)}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-[hsl(var(--success))]' : 'bg-[hsl(var(--warning))]'}`}></div>
-                    <div>
-                      <p className="font-medium font-mono text-sm">{ip.ip}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {ip.location} • {ip.emailCount.toLocaleString()} emails
+              {ipData.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No IP data available yet.</div>
+              ) : (
+                ipData.slice(0, 10).map((ip) => (
+                  <div 
+                    key={ip.ip} 
+                    className="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-muted/50"
+                    onClick={() => setSelectedIP(ip)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-[hsl(var(--success))]' : 'bg-[hsl(var(--warning))]'}`}></div>
+                      <div>
+                        <p className="font-medium font-mono text-sm">{ip.ip}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {ip.location} • {ip.emailCount.toLocaleString()} emails
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <Badge variant={getRiskVariant(ip.riskScore)}>
+                        Risk: {ip.riskScore}
+                      </Badge>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {ip.successRate}% success
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <Badge variant={getRiskVariant(ip.riskScore)}>
-                      Risk: {ip.riskScore}
-                    </Badge>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {ip.successRate}% success
-                    </p>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </CardContent>
         </Card>
@@ -332,6 +353,11 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             </CardTitle>
           </CardHeader>
           <CardContent>
+          {geoData.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">
+              No geographic data available yet.
+            </div>
+          ) : (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -354,6 +380,8 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
                 </PieChart>
               </ResponsiveContainer>
             </div>
+          )}
+
           </CardContent>
         </Card>
       </div>
