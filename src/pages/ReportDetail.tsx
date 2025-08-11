@@ -896,6 +896,9 @@ const ReportDetail = () => {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="sources">
           <Card>
             <CardHeader>
               <CardTitle>Source IP Analysis</CardTitle>

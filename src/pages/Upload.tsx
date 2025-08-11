@@ -351,6 +351,19 @@ const Upload = () => {
     }
   };
 
+  const truncateFilename = (name: string, max = 20) => {
+    if (!name) return '';
+    const dot = name.lastIndexOf('.');
+    if (dot > 0) {
+      const base = name.slice(0, dot);
+      const ext = name.slice(dot);
+      if (base.length + ext.length <= max) return name;
+      const baseAvail = Math.max(1, max - ext.length - 3);
+      return `${base.slice(0, baseAvail)}...${ext}`;
+    }
+    return name.length > max ? `${name.slice(0, max - 3)}...` : name;
+  };
+
   // Debug: Log render state
   console.log(`[Upload component] Rendering with status:`, uploadStatus);
 
@@ -452,10 +465,10 @@ const Upload = () => {
             <div className="space-y-6">
               {/* File Info */}
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-3 min-w-0">
                   {getStatusIcon()}
-                  <div>
-                    <p className="font-medium text-gray-900">{uploadStatus.fileName}</p>
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-900 truncate max-w-[240px]" title={uploadStatus.fileName}>{truncateFilename(uploadStatus.fileName || "", 20)}</p>
                     <p className={`text-sm ${getStatusColor()}`}>{uploadStatus.message}</p>
                   </div>
                 </div>
