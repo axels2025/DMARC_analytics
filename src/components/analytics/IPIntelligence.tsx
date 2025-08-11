@@ -6,6 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter, Cell, PieChart, Pie } from "recharts";
 import { Globe, MapPin, Shield, AlertTriangle, TrendingUp, Users } from "lucide-react";
+import { classifyIPs, IPClassification, setTrustLevel, clearTrustLevel } from "@/utils/ipIntelligence";
 
 interface IPData {
   ip: string;
@@ -16,7 +17,12 @@ interface IPData {
   firstSeen: string;
   lastSeen: string;
   isAuthorized: boolean;
+  category?: IPClassification["category"];
+  provider?: string | null;
+  hostname?: string | null;
+  confidence?: number;
 }
+
 
 interface GeographicData {
   country: string;
@@ -84,7 +90,6 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             country: mockLocation.country,
             firstSeen: record.created_at as string,
             lastSeen: record.created_at as string,
-            isAuthorized: isKnownAuthorizedIP(ip)
           });
         }
         
@@ -120,17 +125,29 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         }
       });
 
+      // Classify IPs
+      const ips = Array.from(ipMap.keys());
+      const classMap = user ? await classifyIPs(ips, user.id, selectedDomain) : new Map<string, IPClassification>();
+
       // Calculate risk scores and process data
-      const processedIPs = Array.from(ipMap.values()).map(entry => ({
-        ip: entry.ip,
-        emailCount: entry.emailCount,
-        successRate: entry.emailCount > 0 ? Math.round((entry.successCount / entry.emailCount) * 100) : 0,
-        location: entry.location,
-        riskScore: calculateRiskScore(entry),
-        firstSeen: new Date(entry.firstSeen).toLocaleDateString(),
-        lastSeen: new Date(entry.lastSeen).toLocaleDateString(),
-        isAuthorized: entry.isAuthorized
-      })).sort((a, b) => b.emailCount - a.emailCount);
+      const processedIPs = Array.from(ipMap.values()).map(entry => {
+        const cls = classMap.get(entry.ip);
+        const isAuthorized = cls ? cls.authorized : false;
+        return {
+          ip: entry.ip,
+          emailCount: entry.emailCount,
+          successRate: entry.emailCount > 0 ? Math.round((entry.successCount / entry.emailCount) * 100) : 0,
+          location: entry.location,
+          riskScore: calculateRiskScore(entry, cls || null),
+          firstSeen: new Date(entry.firstSeen).toLocaleDateString(),
+          lastSeen: new Date(entry.lastSeen).toLocaleDateString(),
+          isAuthorized,
+          category: cls?.category,
+          provider: cls?.provider ?? null,
+          hostname: cls?.hostname ?? null,
+          confidence: cls?.confidence,
+        } as IPData;
+      }).sort((a, b) => b.emailCount - a.emailCount);
 
       const processedCountries = Array.from(countryMap.values()).map(entry => ({
         country: entry.country,
@@ -170,7 +187,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
     return authorizedRanges.some(range => ip.startsWith(range));
   };
 
-  const calculateRiskScore = (entry: any) => {
+  const calculateRiskScore = (entry: any, cls: IPClassification | null) => {
     let score = 0;
     
     // Low success rate increases risk
@@ -178,14 +195,23 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
     if (successRate < 50) score += 40;
     else if (successRate < 80) score += 20;
     
-    // High volume from unknown IP increases risk
-    if (!entry.isAuthorized && entry.emailCount > 100) score += 30;
+    // Classification impact
+    if (cls) {
+      if (cls.category === 'suspicious') score += 30;
+      else if (cls.category === 'unknown') score += 15;
+      else if (cls.category === 'authorized' || cls.category === 'esp') score -= 10;
+      // lower confidence increases risk slightly
+      if (cls.confidence < 40) score += 10; else if (cls.confidence > 80) score -= 5;
+    }
+    
+    // High volume from unknown/unauthorized IP increases risk
+    if (!(cls?.authorized) && entry.emailCount > 100) score += 30;
     
     // New IP increases risk
     const daysSinceFirst = (Date.now() - new Date(entry.firstSeen).getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceFirst < 7) score += 20;
     
-    return Math.min(score, 100);
+    return Math.max(0, Math.min(100, score));
   };
 
   const getRiskColor = (score: number) => {
