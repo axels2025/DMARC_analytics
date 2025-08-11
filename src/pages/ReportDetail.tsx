@@ -715,9 +715,9 @@ const ReportDetail = () => {
             <CardContent>
               {hasEnvelopeData ? (
                 <>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto max-h-96 overflow-y-auto">
                     <table className="w-full text-sm">
-                      <thead className="text-left text-gray-600">
+                      <thead className="text-left text-gray-600 sticky top-0 bg-background">
                         <tr>
                           <th className="py-2 pr-2">Domain</th>
                           <th className="py-2 pr-2 text-right">Total</th>
@@ -727,7 +727,7 @@ const ReportDetail = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {recipientStats.slice(0, 10).map((d: any) => (
+                        {recipientStats.map((d: any) => (
                           <tr key={d.domain} className="border-t">
                             <td className="py-2 pr-2 font-medium">{d.domain}</td>
                             <td className="py-2 pr-2 text-right">{d.total.toLocaleString()}</td>
@@ -739,9 +739,6 @@ const ReportDetail = () => {
                       </tbody>
                     </table>
                   </div>
-                  {recipientStats.length > 10 && (
-                    <p className="text-xs text-gray-500 mt-2">Showing top 10 of {recipientStats.length} recipient domains.</p>
-                  )}
                 </>
               ) : (
                 <div className="flex items-center justify-between p-3 rounded-md bg-blue-50 border border-blue-200">
