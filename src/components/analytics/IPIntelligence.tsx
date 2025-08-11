@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter, Cell, PieChart, Pie } from "recharts";
 import { Globe, MapPin, Shield, AlertTriangle, TrendingUp, Users } from "lucide-react";
-import { classifyIPs, IPClassification, setTrustLevel, clearTrustLevel } from "@/utils/ipIntelligence";
+import { classifyIPs, IPClassification, getIPLocation } from "@/utils/ipIntelligence";
 
 interface IPData {
   ip: string;
@@ -70,59 +70,57 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
 
       if (error) throw error;
 
-      // Process IP data
+      // Process IP data with real geolocation
       const ipMap = new Map<string, any>();
       const countryMap = new Map<string, any>();
 
-      data?.forEach(record => {
+      // Resolve unique IP geolocations with caching
+      const uniqueIps = Array.from(new Set((data || []).map((r: any) => r.source_ip as string)));
+      const locEntries = await Promise.all(uniqueIps.map(async (ip) => {
+        const loc = await getIPLocation(ip).catch(() => ({ country: 'Unknown', city: null }));
+        return [ip, loc] as const;
+      }));
+      const locMap = new Map<string, any>(locEntries);
+
+      (data || []).forEach((record: any) => {
         const ip = record.source_ip as string;
         const isSuccess = (record.dkim_result === 'pass' || record.spf_result === 'pass');
-        
-        // Mock geolocation (in real app, use IP geolocation service)
-        const mockLocation = getMockLocation(ip);
-        
+
+        const loc = locMap.get(ip) || { country: 'Unknown', city: null };
+        const country = loc.country || 'Unknown';
+        const locationLabel = `${loc.city ? `${loc.city}, ` : ''}${country}`;
+
         if (!ipMap.has(ip)) {
           ipMap.set(ip, {
             ip,
             emailCount: 0,
             successCount: 0,
-            location: mockLocation.city + ", " + mockLocation.country,
-            country: mockLocation.country,
+            location: locationLabel,
+            country,
             firstSeen: record.created_at as string,
             lastSeen: record.created_at as string,
           });
         }
-        
+
         const ipEntry = ipMap.get(ip);
         ipEntry.emailCount += record.count as number;
-        
-        if (isSuccess) {
-          ipEntry.successCount += record.count as number;
-        }
-        
+        if (isSuccess) ipEntry.successCount += record.count as number;
+
         if (new Date(record.created_at as string) < new Date(ipEntry.firstSeen)) {
           ipEntry.firstSeen = record.created_at as string;
         }
         if (new Date(record.created_at as string) > new Date(ipEntry.lastSeen)) {
           ipEntry.lastSeen = record.created_at as string;
         }
-        
+
         // Country aggregation
-        if (!countryMap.has(mockLocation.country)) {
-          countryMap.set(mockLocation.country, {
-            country: mockLocation.country,
-            emailCount: 0,
-            ipCount: new Set(),
-            successCount: 0
-          });
+        if (!countryMap.has(country)) {
+          countryMap.set(country, { country, emailCount: 0, ipCount: new Set(), successCount: 0 });
         }
-        
-        const countryEntry = countryMap.get(mockLocation.country);
+        const countryEntry = countryMap.get(country);
         countryEntry.emailCount += record.count as number;
         countryEntry.ipCount.add(ip);
-        if (isSuccess) {
-          countryEntry.successCount += record.count as number;
-        }
+        if (isSuccess) countryEntry.successCount += record.count as number;
       });
 
       // Classify IPs
@@ -165,27 +163,6 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
     }
   };
 
-  const getMockLocation = (ip: string) => {
-    // Mock geolocation data - in real app, use IP geolocation service
-    const locations = [
-      { city: "San Francisco", country: "United States" },
-      { city: "London", country: "United Kingdom" },
-      { city: "Amsterdam", country: "Netherlands" },
-      { city: "Singapore", country: "Singapore" },
-      { city: "Sydney", country: "Australia" },
-      { city: "Frankfurt", country: "Germany" }
-    ];
-    
-    // Use IP to consistently return same location
-    const hash = ip.split('.').reduce((acc, part) => acc + parseInt(part), 0);
-    return locations[hash % locations.length];
-  };
-
-  const isKnownAuthorizedIP = (ip: string) => {
-    // Mock authorized IP detection - in real app, maintain whitelist
-    const authorizedRanges = ['54.', '52.', '34.', '35.']; // Common cloud provider prefixes
-    return authorizedRanges.some(range => ip.startsWith(range));
-  };
 
   const calculateRiskScore = (entry: any, cls: IPClassification | null) => {
     let score = 0;
@@ -274,9 +251,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">High Risk IPs</p>
-                <p className="text-2xl font-bold text-red-600">{highRiskIPs.length}</p>
+                <p className="text-2xl font-bold text-[hsl(var(--destructive))]">{highRiskIPs.length}</p>
               </div>
-              <AlertTriangle className="w-8 h-8 text-red-600" />
+              <AlertTriangle className="w-8 h-8 text-[hsl(var(--destructive))]" />
             </div>
           </CardContent>
         </Card>
@@ -286,9 +263,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Unauthorized IPs</p>
-                <p className="text-2xl font-bold text-orange-600">{unauthorizedIPs.length}</p>
+                <p className="text-2xl font-bold text-[hsl(var(--warning))]">{unauthorizedIPs.length}</p>
               </div>
-              <Shield className="w-8 h-8 text-orange-600" />
+              <Shield className="w-8 h-8 text-[hsl(var(--warning))]" />
             </div>
           </CardContent>
         </Card>
@@ -298,9 +275,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Avg Success Rate</p>
-                <p className="text-2xl font-bold text-green-600">{avgSuccessRate}%</p>
+                <p className="text-2xl font-bold text-[hsl(var(--success))]">{avgSuccessRate}%</p>
               </div>
-              <TrendingUp className="w-8 h-8 text-green-600" />
+              <TrendingUp className="w-8 h-8 text-[hsl(var(--success))]" />
             </div>
           </CardContent>
         </Card>
@@ -324,7 +301,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
                   onClick={() => setSelectedIP(ip)}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-green-500' : 'bg-orange-500'}`}></div>
+                    <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-[hsl(var(--success))]' : 'bg-[hsl(var(--warning))]'}`}></div>
                     <div>
                       <p className="font-medium font-mono text-sm">{ip.ip}</p>
                       <p className="text-xs text-muted-foreground">
@@ -371,7 +348,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
                     ))}
                   </Pie>
                   <Tooltip 
-                    formatter={(value, name) => [`${value.toLocaleString()} emails`, "Volume"]}
+                    formatter={(value) => [`${(value as number).toLocaleString()} emails`, "Volume"]}
                     labelFormatter={(country) => `Country: ${country}`}
                   />
                 </PieChart>

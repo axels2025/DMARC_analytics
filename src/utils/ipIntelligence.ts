@@ -4,6 +4,17 @@ import * as ipaddr from "ipaddr.js";
 
 export type IPCategory = 'authorized' | 'cloud_provider' | 'esp' | 'suspicious' | 'unknown';
 
+export interface IPGeoLocation {
+  country: string;
+  countryCode?: string | null;
+  city?: string | null;
+  region?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  isp?: string | null;
+  org?: string | null;
+}
+
 export interface IPClassification {
   ip: string;
   category: IPCategory;
@@ -12,6 +23,7 @@ export interface IPClassification {
   confidence: number; // 0-100
   authorized: boolean; // convenience flag
   source: string[]; // which signals contributed
+  location?: IPGeoLocation;
 }
 
 export interface TrustedRule {
@@ -76,6 +88,112 @@ function saveCache() {
 }
 
 loadCache();
+
+// Geolocation caching and rate limiting
+const GEO_RATE_LIMIT = { max: 45, intervalMs: 60_000 };
+const geoCallTimestamps: number[] = [];
+
+function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function ensureGeoRateLimit() {
+  while (true) {
+    const now = Date.now();
+    // prune old timestamps
+    while (geoCallTimestamps.length && (now - geoCallTimestamps[0]) > GEO_RATE_LIMIT.intervalMs) {
+      geoCallTimestamps.shift();
+    }
+    if (geoCallTimestamps.length < GEO_RATE_LIMIT.max) {
+      geoCallTimestamps.push(Date.now());
+      return;
+    }
+    // wait a bit before re-checking
+    await sleep(500);
+  }
+}
+
+function unknownLocation(): IPGeoLocation {
+  return { country: 'Unknown', countryCode: null, city: null, region: null, lat: null, lon: null, isp: null, org: null };
+}
+
+function isGeolocatable(ip: string): boolean {
+  try {
+    const addr = ipaddr.parse(ip);
+    const range = (addr as any).range?.() || 'unicast';
+    const bad = ['private','loopback','linkLocal','uniqueLocal','unspecified','broadcast','carrierGradeNat'];
+    return !bad.includes(range);
+  } catch {
+    return false;
+  }
+}
+
+export async function getIPLocation(ip: string): Promise<IPGeoLocation> {
+  // try cache first (stored alongside classification)
+  const cached = memCache.get(ip);
+  if (cached?.location) return cached.location;
+
+  if (!isGeolocatable(ip)) return unknownLocation();
+
+  // helper to persist location into our cache structure
+  const persist = (geo: IPGeoLocation) => {
+    const existing = memCache.get(ip);
+    const updated: IPClassification = existing
+      ? { ...existing, location: geo }
+      : { ip, category: 'unknown', provider: null, hostname: null, confidence: 0, authorized: false, source: ['geo'], location: geo };
+    memCache.set(ip, updated);
+    saveCache();
+    return geo;
+  };
+
+  // Primary: ipapi.co (HTTPS, no key, rate-limited)
+  try {
+    await ensureGeoRateLimit();
+    const res = await fetch(`https://ipapi.co/${encodeURIComponent(ip)}/json/`, { headers: { 'Accept': 'application/json' } });
+    if (res.ok) {
+      const j = await res.json();
+      if (!j.error) {
+        const geo: IPGeoLocation = {
+          country: j.country_name || 'Unknown',
+          countryCode: j.country || null,
+          city: j.city || null,
+          region: j.region || null,
+          lat: typeof j.latitude === 'number' ? j.latitude : (typeof j.lat === 'number' ? j.lat : null),
+          lon: typeof j.longitude === 'number' ? j.longitude : (typeof j.lon === 'number' ? j.lon : null),
+          isp: j.org || j.org_name || null,
+          org: j.org || j.org_name || null,
+        };
+        return persist(geo);
+      }
+    }
+  } catch (e) {
+    console.warn('ipapi.co geolocation failed', e);
+  }
+
+  // Fallback: ipwhois.app (HTTPS)
+  try {
+    await ensureGeoRateLimit();
+    const res = await fetch(`https://ipwhois.app/json/${encodeURIComponent(ip)}`);
+    if (res.ok) {
+      const j = await res.json();
+      if (j && j.success !== false) {
+        const geo: IPGeoLocation = {
+          country: j.country || 'Unknown',
+          countryCode: j.country_code || null,
+          city: j.city || null,
+          region: j.region || null,
+          lat: typeof j.latitude === 'number' ? j.latitude : null,
+          lon: typeof j.longitude === 'number' ? j.longitude : null,
+          isp: j.isp || (j.connection && j.connection.isp) || null,
+          org: j.org || null,
+        };
+        return persist(geo);
+      }
+    }
+  } catch (e) {
+    console.warn('ipwhois.app geolocation failed', e);
+  }
+
+  return unknownLocation();
+}
 
 export function matchCIDR(ip: string, cidr: string): boolean {
   try {
