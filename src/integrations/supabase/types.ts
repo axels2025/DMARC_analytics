@@ -162,6 +162,81 @@ export type Database = {
         }
         Relationships: []
       }
+      ip_classifications: {
+        Row: {
+          as_of: string
+          category: string
+          category_safe: string | null
+          confidence: number
+          details: Json | null
+          domain: string | null
+          hostname: string | null
+          id: string
+          ip: unknown
+          provider: string | null
+          user_id: string | null
+        }
+        Insert: {
+          as_of?: string
+          category: string
+          category_safe?: string | null
+          confidence: number
+          details?: Json | null
+          domain?: string | null
+          hostname?: string | null
+          id?: string
+          ip: unknown
+          provider?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          as_of?: string
+          category?: string
+          category_safe?: string | null
+          confidence?: number
+          details?: Json | null
+          domain?: string | null
+          hostname?: string | null
+          id?: string
+          ip?: unknown
+          provider?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      trusted_ips: {
+        Row: {
+          created_at: string
+          domain: string
+          id: string
+          ip_address: unknown | null
+          ip_range: unknown | null
+          notes: string | null
+          trust_level: Database["public"]["Enums"]["trust_level"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          domain: string
+          id?: string
+          ip_address?: unknown | null
+          ip_range?: unknown | null
+          notes?: string | null
+          trust_level: Database["public"]["Enums"]["trust_level"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          domain?: string
+          id?: string
+          ip_address?: unknown | null
+          ip_range?: unknown | null
+          notes?: string | null
+          trust_level?: Database["public"]["Enums"]["trust_level"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_domains: {
         Row: {
           created_at: string
@@ -194,7 +269,7 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      trust_level: "trusted" | "blocked"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -321,6 +396,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      trust_level: ["trusted", "blocked"],
+    },
   },
 } as const
