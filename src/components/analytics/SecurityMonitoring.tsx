@@ -385,18 +385,38 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          onClick={() => document.getElementById('ip-whitelist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        >
+          Manage Whitelist
+        </Button>
+      </div>
       {/* Security Metrics Overview */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Threat Score</p>
-                <p className={`text-2xl font-bold ${metrics.threatScore >= 70 ? 'text-red-600' : metrics.threatScore >= 40 ? 'text-yellow-600' : 'text-green-600'}`}>
+                <p className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                  Threat Score
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="w-4 h-4 text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{getRiskExplanation(metrics.threatScore >= 70 ? 'high' : metrics.threatScore >= 40 ? 'medium' : 'low')}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </p>
+                <p className="text-2xl font-bold" style={{ color: threatColor }}>
                   {metrics.threatScore}/100
                 </p>
               </div>
-              <Shield className={`w-8 h-8 ${metrics.threatScore >= 70 ? 'text-red-600' : metrics.threatScore >= 40 ? 'text-yellow-600' : 'text-green-600'}`} />
+              <Shield className="w-8 h-8" style={{ color: threatColor }} />
             </div>
           </CardContent>
         </Card>
@@ -417,7 +437,19 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">New IPs</p>
+                <p className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                  New IPs
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="w-4 h-4 text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>New senders are flagged as medium risk until verified and trusted.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </p>
                 <p className="text-2xl font-bold text-orange-600">{metrics.newIPsDetected}</p>
               </div>
               <Users className="w-8 h-8 text-orange-600" />
@@ -510,16 +542,31 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
             <div className="space-y-3 max-h-64 overflow-y-auto">
               {securityEvents.slice(0, 8).map((event) => (
                 <div key={event.id} className="flex items-start gap-3 p-3 border rounded-lg">
-                  <div className={`p-1 rounded-full ${event.severity === 'high' ? 'bg-red-100' : event.severity === 'medium' ? 'bg-yellow-100' : 'bg-green-100'}`}>
+                  <div className="p-1 rounded-full bg-accent">
                     {getTypeIcon(event.type)}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-medium truncate">{event.description}</p>
-                      <Badge variant={getSeverityVariant(event.severity)} className="ml-2">
-                        {event.severity}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={getSeverityVariant(event.severity)} className="ml-2">
+                          {event.severity}
+                        </Badge>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="w-4 h-4 text-muted-foreground" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>{getRiskExplanation(event.severity)}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
                     </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {getEventExplanation(event.type)}
+                    </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       <Clock className="w-3 h-3 inline mr-1" />
                       {new Date(event.timestamp).toLocaleString()}
@@ -530,7 +577,7 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
               
               {securityEvents.length === 0 && (
                 <div className="text-center py-8">
-                  <Shield className="w-8 h-8 mx-auto text-green-600 mb-2" />
+                  <Shield className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
                   <p className="text-sm text-muted-foreground">No security events detected</p>
                 </div>
               )}
@@ -579,12 +626,18 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
               <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
-                  <div>
+                  <div className="flex-1">
                     <h4 className="font-medium text-red-800">High Threat Level Detected</h4>
                     <p className="text-sm text-red-700 mt-1">
                       Immediate action required. Consider implementing stricter DMARC policies and review authentication setup.
                     </p>
                   </div>
+                  <Button
+                    variant="secondary"
+                    onClick={() => document.getElementById('ip-whitelist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Open Whitelist Manager
+                  </Button>
                 </div>
               </div>
             )}
@@ -593,12 +646,18 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
               <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
                 <div className="flex items-start gap-2">
                   <Shield className="w-5 h-5 text-orange-600 mt-0.5" />
-                  <div>
+                  <div className="flex-1">
                     <h4 className="font-medium text-orange-800">Spoofing Activity</h4>
                     <p className="text-sm text-orange-700 mt-1">
                       {metrics.spoofingAttempts} spoofing attempts detected. Consider moving to a stricter DMARC policy.
                     </p>
                   </div>
+                  <Button
+                    variant="secondary"
+                    onClick={() => document.getElementById('ip-whitelist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Review Trusted IPs
+                  </Button>
                 </div>
               </div>
             )}
@@ -607,18 +666,160 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
               <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                 <div className="flex items-start gap-2">
                   <Users className="w-5 h-5 text-yellow-600 mt-0.5" />
-                  <div>
+                  <div className="flex-1">
                     <h4 className="font-medium text-yellow-800">Many New IP Addresses</h4>
                     <p className="text-sm text-yellow-700 mt-1">
-                      {metrics.newIPsDetected} new IPs detected. Review and whitelist legitimate sending sources.
+                      {metrics.newIPsDetected} new IPs detected. Verify senders and mark legitimate sources as Trusted.
                     </p>
                   </div>
+                  <Button
+                    onClick={() => document.getElementById('ip-whitelist')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Open Whitelist Manager
+                  </Button>
                 </div>
               </div>
             )}
           </div>
         </CardContent>
       </Card>
+
+      {/* Trusted/Blocked IPs */}
+      <Card id="ip-whitelist">
+        <CardHeader>
+          <CardTitle>Trusted/Blocked IPs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!selectedDomain ? (
+            <p className="text-sm text-muted-foreground">
+              Select a domain to manage its whitelist and blocklist.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => updateTrust(trustedRules.filter(r => selectedRuleIds.has(getRuleKey(r))), 'trusted')}
+                  disabled={trustedRules.length === 0 || selectedRuleIds.size === 0}
+                >
+                  Mark as Trusted
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => updateTrust(trustedRules.filter(r => selectedRuleIds.has(getRuleKey(r))), 'blocked')}
+                  disabled={trustedRules.length === 0 || selectedRuleIds.size === 0}
+                >
+                  Mark as Blocked
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => removeRules(trustedRules.filter(r => selectedRuleIds.has(getRuleKey(r))))}
+                  disabled={trustedRules.length === 0 || selectedRuleIds.size === 0}
+                >
+                  Remove Selected
+                </Button>
+                <div className="ml-auto">
+                  <Button variant="outline" onClick={loadTrusted}>Refresh</Button>
+                </div>
+              </div>
+
+              <div className="border rounded-md overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={trustedRules.length > 0 && selectedRuleIds.size === trustedRules.length}
+                          onCheckedChange={(c) => toggleAll(Boolean(c))}
+                          aria-label="Select all"
+                        />
+                      </TableHead>
+                      <TableHead>IP / Range</TableHead>
+                      <TableHead>Trust Level</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {rulesLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                          Loading rules...
+                        </TableCell>
+                      </TableRow>
+                    ) : trustedRules.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                          No trusted or blocked IPs yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      trustedRules.map((r) => {
+                        const id = getRuleKey(r);
+                        const ip = getRuleDisplayIp(r);
+                        const trust = ((r as any).trust_level ?? '') as string;
+                        const note = ((r as any).notes ?? '') as string;
+                        const isChecked = selectedRuleIds.has(id);
+                        return (
+                          <TableRow key={id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={isChecked}
+                                onCheckedChange={(c) => toggleOne(id, Boolean(c))}
+                                aria-label={`Select ${ip}`}
+                              />
+                            </TableCell>
+                            <TableCell className="font-mono">{ip}</TableCell>
+                            <TableCell>
+                              <Badge variant={trust === 'blocked' ? 'destructive' : trust === 'trusted' ? 'default' : 'secondary'}>
+                                {trust || '—'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="max-w-[280px] truncate" title={note || undefined}>
+                              {note || '—'}
+                            </TableCell>
+                            <TableCell className="text-right space-x-2">
+                              <Button variant="secondary" size="sm" onClick={() => updateTrust([r], 'trusted')}>
+                                Mark Trusted
+                              </Button>
+                              <Button variant="secondary" size="sm" onClick={() => updateTrust([r], 'blocked')}>
+                                Mark Blocked
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => openNoteEditor(r)}>
+                                Edit Note
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => removeRules([r])}>
+                                Remove
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={noteOpen} onOpenChange={setNoteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Note</DialogTitle>
+          </DialogHeader>
+          <Textarea
+            value={noteValue}
+            onChange={(e) => setNoteValue(e.target.value)}
+            placeholder="Why is this IP trusted or blocked?"
+          />
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setNoteOpen(false)}>Cancel</Button>
+            <Button onClick={saveNote}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
