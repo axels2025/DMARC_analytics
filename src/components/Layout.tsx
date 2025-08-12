@@ -39,6 +39,13 @@ const Layout = ({ children }: LayoutProps) => {
                 src="/lovable-uploads/a71f79ba-2fdb-4d01-aaaa-7f1894490d08.png"
                 alt="DMARC Analytics Logo"
                 className="h-8 w-auto"
+                loading="eager"
+                onError={(e) => {
+                  const img = e.currentTarget as HTMLImageElement;
+                  if (!img.src.includes("placeholder.svg")) {
+                    img.src = "/placeholder.svg";
+                  }
+                }}
               />
             </Link>
           </div>
