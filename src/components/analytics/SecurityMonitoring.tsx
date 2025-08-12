@@ -5,13 +5,17 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, AreaChart, Area, BarChart, Bar, Legend } from "recharts";
-import { Shield, AlertTriangle, TrendingUp, Mail, Users, Clock, Info } from "lucide-react";
+import { Shield, AlertTriangle, TrendingUp, Mail, Users, Clock, Info, CheckCircle, XCircle, Check } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchTrustedRules, setTrustLevel, clearTrustLevel, type TrustedRule } from "@/utils/ipIntelligence";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus } from "lucide-react";
+import { fetchTrustedRules, setTrustLevel, clearTrustLevel, validateIPOrCIDR, type TrustedRule } from "@/utils/ipIntelligence";
 import { toast } from "@/hooks/use-toast";
 interface SecurityEvent {
   id: string;
@@ -57,6 +61,37 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
   const [noteEditingRule, setNoteEditingRule] = useState<TrustedRule | null>(null);
   const [noteValue, setNoteValue] = useState("");
 
+  // Add IP dialog state
+  const [addIpOpen, setAddIpOpen] = useState(false);
+  const [newIpValue, setNewIpValue] = useState("");
+  const [newTrustLevel, setNewTrustLevel] = useState<'trusted' | 'blocked'>('trusted');
+  const [newIpNote, setNewIpNote] = useState("");
+  const [ipValidation, setIpValidation] = useState<{valid: boolean; error?: string}>({ valid: true });
+
+  // Confirmed events state
+  const [confirmedEvents, setConfirmedEvents] = useState<Set<string>>(new Set());
+
+  // Create a unique key for each event based on type and IP
+  const getEventKey = (event: SecurityEvent): string => {
+    return `${event.type}-${event.details?.ip || 'unknown'}-${selectedDomain}`;
+  };
+
+  // Load confirmed events from localStorage on mount
+  useEffect(() => {
+    if (user && selectedDomain) {
+      const key = `confirmed-events-${user.id}-${selectedDomain}`;
+      try {
+        const stored = localStorage.getItem(key);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setConfirmedEvents(new Set(parsed));
+        }
+      } catch {
+        // Ignore localStorage errors
+      }
+    }
+  }, [user, selectedDomain]);
+
   // Derived colors using design tokens
   const threatColor = useMemo(() => {
     if (!metrics) return "";
@@ -64,6 +99,14 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
     if (metrics.threatScore >= 40) return "hsl(var(--chart-3))"; // warning
     return "hsl(var(--chart-2))"; // low/green
   }, [metrics]);
+
+  // Filter out confirmed events from display
+  const filteredSecurityEvents = useMemo(() => {
+    return securityEvents.filter(event => {
+      const eventKey = getEventKey(event);
+      return !confirmedEvents.has(eventKey);
+    });
+  }, [securityEvents, confirmedEvents, selectedDomain]);
   useEffect(() => {
     if (user) {
       fetchSecurityData();
@@ -276,24 +319,42 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
 
   const updateTrust = async (targets: TrustedRule[], trust: 'trusted' | 'blocked') => {
     if (!user || !selectedDomain) return;
-    for (const r of targets) {
-      const target = getRuleDisplayIp(r);
-      await setTrustLevel(user.id, selectedDomain, target, trust, (r as any).notes ?? undefined);
+    try {
+      for (const r of targets) {
+        const target = getRuleDisplayIp(r);
+        await setTrustLevel(user.id, selectedDomain, target, trust, (r as any).notes ?? undefined);
+      }
+      await loadTrusted();
+      toast({ title: trust === 'trusted' ? 'Marked as Trusted' : 'Marked as Blocked', description: `${targets.length} rule(s) updated.` });
+      setSelectedRuleIds(new Set());
+    } catch (error) {
+      console.error('Error updating trust level:', error);
+      toast({ 
+        title: 'Error', 
+        description: error instanceof Error ? error.message : 'Failed to update trust level',
+        variant: 'destructive' 
+      });
     }
-    await loadTrusted();
-    toast({ title: trust === 'trusted' ? 'Marked as Trusted' : 'Marked as Blocked', description: `${targets.length} rule(s) updated.` });
-    setSelectedRuleIds(new Set());
   };
 
   const removeRules = async (targets: TrustedRule[]) => {
     if (!user || !selectedDomain) return;
-    for (const r of targets) {
-      const target = getRuleDisplayIp(r);
-      await clearTrustLevel(user.id, selectedDomain, target);
+    try {
+      for (const r of targets) {
+        const target = getRuleDisplayIp(r);
+        await clearTrustLevel(user.id, selectedDomain, target);
+      }
+      await loadTrusted();
+      toast({ title: 'Removed', description: `${targets.length} rule(s) removed.` });
+      setSelectedRuleIds(new Set());
+    } catch (error) {
+      console.error('Error removing rules:', error);
+      toast({ 
+        title: 'Error', 
+        description: error instanceof Error ? error.message : 'Failed to remove rules',
+        variant: 'destructive' 
+      });
     }
-    await loadTrusted();
-    toast({ title: 'Removed', description: `${targets.length} rule(s) removed.` });
-    setSelectedRuleIds(new Set());
   };
 
   const openNoteEditor = (r: TrustedRule) => {
@@ -304,14 +365,112 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
 
   const saveNote = async () => {
     if (!user || !selectedDomain || !noteEditingRule) return;
-    const trust = ((noteEditingRule as any).trust_level ?? 'trusted') as 'trusted' | 'blocked';
-    const target = getRuleDisplayIp(noteEditingRule);
-    await setTrustLevel(user.id, selectedDomain, target, trust, noteValue);
-    setNoteOpen(false);
-    setNoteEditingRule(null);
-    setNoteValue('');
-    await loadTrusted();
-    toast({ title: 'Note saved' });
+    try {
+      const trust = ((noteEditingRule as any).trust_level ?? 'trusted') as 'trusted' | 'blocked';
+      const target = getRuleDisplayIp(noteEditingRule);
+      await setTrustLevel(user.id, selectedDomain, target, trust, noteValue);
+      setNoteOpen(false);
+      setNoteEditingRule(null);
+      setNoteValue('');
+      await loadTrusted();
+      toast({ title: 'Note saved' });
+    } catch (error) {
+      console.error('Error saving note:', error);
+      toast({ 
+        title: 'Error', 
+        description: error instanceof Error ? error.message : 'Failed to save note',
+        variant: 'destructive' 
+      });
+    }
+  };
+
+  // Validate IP input in real-time
+  const handleIpInputChange = (value: string) => {
+    setNewIpValue(value);
+    if (value.trim() === '') {
+      setIpValidation({ valid: true });
+    } else {
+      const validation = validateIPOrCIDR(value);
+      setIpValidation(validation);
+    }
+  };
+
+  const addNewIp = async () => {
+    if (!user || !selectedDomain || !newIpValue.trim()) return;
+    
+    const validation = validateIPOrCIDR(newIpValue);
+    if (!validation.valid) {
+      setIpValidation(validation);
+      return;
+    }
+
+    try {
+      await setTrustLevel(user.id, selectedDomain, newIpValue.trim(), newTrustLevel, newIpNote.trim() || undefined);
+      setAddIpOpen(false);
+      setNewIpValue('');
+      setNewTrustLevel('trusted');
+      setNewIpNote('');
+      setIpValidation({ valid: true });
+      await loadTrusted();
+      toast({ 
+        title: 'IP Added', 
+        description: `${newIpValue.trim()} has been marked as ${newTrustLevel}`
+      });
+    } catch (error) {
+      console.error('Error adding IP:', error);
+      toast({ 
+        title: 'Error', 
+        description: error instanceof Error ? error.message : 'Failed to add IP',
+        variant: 'destructive' 
+      });
+    }
+  };
+
+  // Quick actions for security events
+  const handleQuickTrust = async (ip: string, trust: 'trusted' | 'blocked') => {
+    if (!user || !selectedDomain) return;
+    
+    try {
+      await setTrustLevel(user.id, selectedDomain, ip, trust, `Quick ${trust} from security event`);
+      await loadTrusted();
+      toast({ 
+        title: `IP ${trust === 'trusted' ? 'Trusted' : 'Blocked'}`, 
+        description: `${ip} has been marked as ${trust}`
+      });
+    } catch (error) {
+      console.error('Error setting trust level:', error);
+      toast({ 
+        title: 'Error', 
+        description: error instanceof Error ? error.message : `Failed to mark IP as ${trust}`,
+        variant: 'destructive' 
+      });
+    }
+  };
+
+  // Handle confirming/dismissing an event
+  const handleConfirmEvent = (event: SecurityEvent) => {
+    if (!user || !selectedDomain) return;
+    
+    const eventKey = getEventKey(event);
+    const newConfirmed = new Set(confirmedEvents);
+    newConfirmed.add(eventKey);
+    setConfirmedEvents(newConfirmed);
+    
+    // Save to localStorage
+    const key = `confirmed-events-${user.id}-${selectedDomain}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(Array.from(newConfirmed)));
+      toast({ 
+        title: 'Event Confirmed', 
+        description: 'This warning has been dismissed and will not appear again unless the IP reappears in new reports.'
+      });
+    } catch {
+      // Ignore localStorage errors but still update UI
+      toast({ 
+        title: 'Event Confirmed', 
+        description: 'This warning has been dismissed for this session.'
+      });
+    }
   };
 
   const getRiskExplanation = (severity: 'low' | 'medium' | 'high') => {
@@ -540,7 +699,7 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3 max-h-64 overflow-y-auto">
-              {securityEvents.slice(0, 8).map((event) => (
+              {filteredSecurityEvents.slice(0, 8).map((event) => (
                 <div key={event.id} className="flex items-start gap-3 p-3 border rounded-lg">
                   <div className="p-1 rounded-full bg-accent">
                     {getTypeIcon(event.type)}
@@ -571,11 +730,43 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
                       <Clock className="w-3 h-3 inline mr-1" />
                       {new Date(event.timestamp).toLocaleString()}
                     </p>
+                    {/* Quick actions for new IP events */}
+                    {event.type === 'new_ip' && event.details?.ip && selectedDomain && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleQuickTrust(event.details.ip, 'trusted')}
+                          className="h-6 text-xs flex items-center gap-1"
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                          Trust
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleQuickTrust(event.details.ip, 'blocked')}
+                          className="h-6 text-xs flex items-center gap-1"
+                        >
+                          <XCircle className="w-3 h-3" />
+                          Block
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => handleConfirmEvent(event)}
+                          className="h-6 text-xs flex items-center gap-1"
+                        >
+                          <Check className="w-3 h-3" />
+                          Confirm
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
               
-              {securityEvents.length === 0 && (
+              {filteredSecurityEvents.length === 0 && (
                 <div className="text-center py-8">
                   <Shield className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
                   <p className="text-sm text-muted-foreground">No security events detected</p>
@@ -587,14 +778,14 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
       </div>
 
       {/* Detailed Events Table */}
-      {securityEvents.length > 8 && (
+      {filteredSecurityEvents.length > 8 && (
         <Card>
           <CardHeader>
             <CardTitle>All Security Events</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {securityEvents.map((event) => (
+              {filteredSecurityEvents.map((event) => (
                 <div key={event.id} className="flex items-center justify-between p-3 border rounded">
                   <div className="flex items-center gap-3">
                     {getTypeIcon(event.type)}
@@ -603,11 +794,45 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
                       <p className="text-xs text-muted-foreground">
                         {new Date(event.timestamp).toLocaleString()}
                       </p>
+                      {/* Quick actions for new IP events */}
+                      {event.type === 'new_ip' && event.details?.ip && selectedDomain && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleQuickTrust(event.details.ip, 'trusted')}
+                            className="h-6 text-xs flex items-center gap-1"
+                          >
+                            <CheckCircle className="w-3 h-3" />
+                            Trust
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleQuickTrust(event.details.ip, 'blocked')}
+                            className="h-6 text-xs flex items-center gap-1"
+                          >
+                            <XCircle className="w-3 h-3" />
+                            Block
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleConfirmEvent(event)}
+                            className="h-6 text-xs flex items-center gap-1"
+                          >
+                            <Check className="w-3 h-3" />
+                            Confirm
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <Badge variant={getSeverityVariant(event.severity)}>
-                    {event.severity}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getSeverityVariant(event.severity)}>
+                      {event.severity}
+                    </Badge>
+                  </div>
                 </div>
               ))}
             </div>
@@ -697,6 +922,14 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
           ) : (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
+                <Button
+                  variant="default"
+                  onClick={() => setAddIpOpen(true)}
+                  className="flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add IP/Range
+                </Button>
                 <Button
                   variant="secondary"
                   onClick={() => updateTrust(trustedRules.filter(r => selectedRuleIds.has(getRuleKey(r))), 'trusted')}
@@ -817,6 +1050,65 @@ const SecurityMonitoring = ({ selectedDomain }: SecurityMonitoringProps) => {
           <DialogFooter>
             <Button variant="secondary" onClick={() => setNoteOpen(false)}>Cancel</Button>
             <Button onClick={saveNote}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addIpOpen} onOpenChange={setAddIpOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add IP Address or CIDR Range</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="ip-input">IP Address or CIDR Range</Label>
+              <Input
+                id="ip-input"
+                value={newIpValue}
+                onChange={(e) => handleIpInputChange(e.target.value)}
+                placeholder="192.168.1.1 or 192.168.1.0/24"
+                className={!ipValidation.valid ? "border-red-500" : ""}
+              />
+              {!ipValidation.valid && ipValidation.error && (
+                <p className="text-sm text-red-600">{ipValidation.error}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Enter a single IP address (e.g., 192.168.1.1) or a CIDR range (e.g., 192.168.1.0/24)
+              </p>
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="trust-level">Trust Level</Label>
+              <Select value={newTrustLevel} onValueChange={(value: 'trusted' | 'blocked') => setNewTrustLevel(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="trusted">Trusted</SelectItem>
+                  <SelectItem value="blocked">Blocked</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="note-input">Notes (Optional)</Label>
+              <Textarea
+                id="note-input"
+                value={newIpNote}
+                onChange={(e) => setNewIpNote(e.target.value)}
+                placeholder="Why is this IP/range trusted or blocked?"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setAddIpOpen(false)}>Cancel</Button>
+            <Button 
+              onClick={addNewIp} 
+              disabled={!newIpValue.trim() || !ipValidation.valid}
+            >
+              Add IP/Range
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

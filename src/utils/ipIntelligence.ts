@@ -78,13 +78,17 @@ function loadCache() {
     if (!raw) return;
     const parsed: IPClassification[] = JSON.parse(raw);
     parsed.forEach((c) => memCache.set(c.ip, c));
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
 function saveCache() {
   try {
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(Array.from(memCache.values())));
-  } catch {}
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
 loadCache();
@@ -207,6 +211,44 @@ export function matchCIDR(ip: string, cidr: string): boolean {
   }
 }
 
+export function validateIPOrCIDR(input: string): { valid: boolean; type: 'ip' | 'cidr' | null; error?: string } {
+  if (!input || input.trim() === '') {
+    return { valid: false, type: null, error: 'IP address or CIDR range is required' };
+  }
+
+  const trimmed = input.trim();
+
+  // Check if it's a CIDR range
+  if (trimmed.includes('/')) {
+    try {
+      const [ip, prefix] = trimmed.split('/');
+      const addr = ipaddr.parse(ip);
+      const prefixNum = parseInt(prefix, 10);
+      
+      if (isNaN(prefixNum)) {
+        return { valid: false, type: null, error: 'Invalid CIDR prefix' };
+      }
+      
+      const maxPrefix = addr.kind() === 'ipv4' ? 32 : 128;
+      if (prefixNum < 0 || prefixNum > maxPrefix) {
+        return { valid: false, type: null, error: `CIDR prefix must be between 0 and ${maxPrefix}` };
+      }
+      
+      return { valid: true, type: 'cidr' };
+    } catch {
+      return { valid: false, type: null, error: 'Invalid CIDR range format' };
+    }
+  }
+
+  // Check if it's a single IP
+  try {
+    ipaddr.parse(trimmed);
+    return { valid: true, type: 'ip' };
+  } catch {
+    return { valid: false, type: null, error: 'Invalid IP address format' };
+  }
+}
+
 export async function fetchTrustedRules(userId: string, domain?: string): Promise<TrustedRule[]> {
   let q = supabase
     .from('trusted_ips')
@@ -318,21 +360,92 @@ export async function classifyIPs(ips: string[], userId: string, domain?: string
   return new Map(results.map((r) => [r.ip, r]));
 }
 
-export async function setTrustLevel(userId: string, domain: string, ip: string, trust: 'trusted' | 'blocked', note?: string) {
-  const { error } = await supabase.from('trusted_ips').insert({
+export async function setTrustLevel(userId: string, domain: string, input: string, trust: 'trusted' | 'blocked', note?: string) {
+  const validation = validateIPOrCIDR(input);
+  if (!validation.valid) {
+    throw new Error(validation.error || 'Invalid IP or CIDR format');
+  }
+
+  const trimmed = input.trim();
+  const isRange = validation.type === 'cidr';
+
+  // First, try to find existing record
+  let existingQuery = supabase
+    .from('trusted_ips')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('domain', domain);
+
+  if (isRange) {
+    existingQuery = existingQuery.eq('ip_range', trimmed);
+  } else {
+    existingQuery = existingQuery.eq('ip_address', trimmed);
+  }
+
+  const { data: existing, error: findError } = await existingQuery.single();
+
+  if (findError && findError.code !== 'PGRST116') { // PGRST116 = no rows returned
+    throw findError;
+  }
+
+  // Prepare the record data
+  const recordData = {
     user_id: userId,
     domain,
-    ip_address: ip,
+    ip_address: isRange ? null : trimmed,
+    ip_range: isRange ? trimmed : null,
     trust_level: trust,
     notes: note || null,
-  });
+  };
+
+  let error;
+  if (existing) {
+    // Update existing record
+    ({ error } = await supabase
+      .from('trusted_ips')
+      .update(recordData)
+      .eq('id', existing.id));
+  } else {
+    // Insert new record
+    ({ error } = await supabase
+      .from('trusted_ips')
+      .insert(recordData));
+  }
+
   if (error) throw error;
-  // invalidate local cache for this IP
-  memCache.delete(ip); saveCache();
+  
+  // invalidate local cache for this IP (if it's a single IP)
+  if (!isRange) {
+    memCache.delete(trimmed);
+    saveCache();
+  }
 }
 
-export async function clearTrustLevel(userId: string, domain: string, ip: string) {
-  const { error } = await supabase.from('trusted_ips').delete().match({ user_id: userId, domain, ip_address: ip });
+export async function clearTrustLevel(userId: string, domain: string, input: string) {
+  const validation = validateIPOrCIDR(input);
+  if (!validation.valid) {
+    throw new Error(validation.error || 'Invalid IP or CIDR format');
+  }
+
+  const trimmed = input.trim();
+  const isRange = validation.type === 'cidr';
+
+  let query = supabase.from('trusted_ips').delete()
+    .eq('user_id', userId)
+    .eq('domain', domain);
+
+  if (isRange) {
+    query = query.eq('ip_range', trimmed);
+  } else {
+    query = query.eq('ip_address', trimmed);
+  }
+
+  const { error } = await query;
   if (error) throw error;
-  memCache.delete(ip); saveCache();
+  
+  // invalidate local cache for this IP (if it's a single IP)
+  if (!isRange) {
+    memCache.delete(trimmed);
+    saveCache();
+  }
 }
