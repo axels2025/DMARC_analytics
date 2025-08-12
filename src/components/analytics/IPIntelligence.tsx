@@ -50,6 +50,8 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
 
   const fetchIPIntelligence = async () => {
     try {
+      setLoading(true);
+      
       // 1) Fetch reports for this user (and optional domain)
       const reportsQuery = supabase
         .from('dmarc_reports')
@@ -61,10 +63,15 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         : await reportsQuery;
 
       if (reportsError) throw reportsError;
+      
       const reportIds = (reports || []).map((r: any) => r.id);
+      console.log('Found reports:', reports?.length || 0);
+      
       if (reportIds.length === 0) {
+        console.log('No reports found');
         setIpData([]);
         setGeoData([]);
+        setLoading(false);
         return;
       }
 
@@ -75,6 +82,16 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         .in('report_id', reportIds);
 
       if (recordsError) throw recordsError;
+      
+      console.log('Found records:', records?.length || 0);
+      
+      if (!records || records.length === 0) {
+        console.log('No records found');
+        setIpData([]);
+        setGeoData([]);
+        setLoading(false);
+        return;
+      }
 
       // Helper to normalize IPs (strip CIDR if present)
       const normalizeIP = (ip: string) => ip?.toString().split('/')?.[0]?.trim() || ip;
@@ -85,6 +102,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
 
       // Resolve unique IP geolocations with caching
       const uniqueIps = Array.from(new Set((records || []).map((r: any) => normalizeIP(r.source_ip as string))));
+      console.log('Unique IPs found:', uniqueIps.length);
 
       const locMap = new Map<string, any>();
       // Sequential fetch to be gentle with rate limits; cached hits are instant
@@ -92,7 +110,8 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         try {
           const loc = await getIPLocation(ip);
           locMap.set(ip, loc);
-        } catch {
+        } catch (error) {
+          console.warn('Failed to get location for IP:', ip, error);
           locMap.set(ip, { country: 'Unknown', city: null });
         }
       }
@@ -169,6 +188,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         successRate: entry.emailCount > 0 ? Math.round((entry.successCount / entry.emailCount) * 100) : 0
       })).sort((a, b) => b.emailCount - a.emailCount);
 
+      console.log('Processed IPs:', processedIPs.length);
+      console.log('Processed Countries:', processedCountries.length);
+      
       setIpData(processedIPs);
       setGeoData(processedCountries);
     } catch (error) {
@@ -306,9 +328,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Unauthorized IPs</p>
-                <p className="text-2xl font-bold text-[hsl(var(--warning))]">{unauthorizedIPs.length}</p>
+                <p className="text-2xl font-bold text-orange-600">{unauthorizedIPs.length}</p>
               </div>
-              <Shield className="w-8 h-8 text-[hsl(var(--warning))]" />
+              <Shield className="w-8 h-8 text-orange-600" />
             </div>
           </CardContent>
         </Card>
@@ -318,9 +340,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Avg Success Rate</p>
-                <p className="text-2xl font-bold text-[hsl(var(--success))]">{avgSuccessRate}%</p>
+                <p className="text-2xl font-bold text-green-600">{avgSuccessRate}%</p>
               </div>
-              <TrendingUp className="w-8 h-8 text-[hsl(var(--success))]" />
+              <TrendingUp className="w-8 h-8 text-green-600" />
             </div>
           </CardContent>
         </Card>
@@ -338,7 +360,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
           <CardContent>
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {ipData.length === 0 ? (
-                <div className="text-sm text-muted-foreground">No IP data available yet.</div>
+                <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">
+                  No IP data available yet. Please upload DMARC reports to see IP intelligence.
+                </div>
               ) : (
                 ipData.slice(0, 10).map((ip) => (
                   <div 
@@ -347,7 +371,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
                     onClick={() => setSelectedIP(ip)}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-[hsl(var(--success))]' : 'bg-[hsl(var(--warning))]'}`}></div>
+                      <div className={`w-3 h-3 rounded-full ${ip.isAuthorized ? 'bg-green-500' : 'bg-orange-500'}`}></div>
                       <div>
                         <p className="font-medium font-mono text-sm">{ip.ip}</p>
                         <p className="text-xs text-muted-foreground">
@@ -381,7 +405,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
           <CardContent>
           {geoData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-sm text-muted-foreground">
-              No geographic data available yet.
+              No geographic data available yet. Please upload DMARC reports to see geographic distribution.
             </div>
           ) : (
             <div className="h-64">
@@ -391,7 +415,7 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
                     data={geoData.slice(0, 6)}
                     cx="50%"
                     cy="50%"
-                    outerRadius={84}
+                    outerRadius={80}
                     dataKey="emailCount"
                     paddingAngle={2}
                     label={renderPieLabel}
@@ -421,22 +445,28 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
-            {geoData.map((country) => (
-              <div key={country.country} className="flex items-center justify-between p-3 border rounded">
-                <div className="flex items-center gap-3">
-                  <Users className="w-4 h-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">{country.country}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {country.ipCount} IPs • {country.emailCount.toLocaleString()} emails
-                    </p>
-                  </div>
-                </div>
-                <Badge variant={country.successRate >= 80 ? "default" : country.successRate >= 60 ? "secondary" : "destructive"}>
-                  {country.successRate}% success
-                </Badge>
+            {geoData.length === 0 ? (
+              <div className="text-center py-8 text-sm text-muted-foreground">
+                No country data available yet. Upload DMARC reports to see country-wise analysis.
               </div>
-            ))}
+            ) : (
+              geoData.map((country) => (
+                <div key={country.country} className="flex items-center justify-between p-3 border rounded">
+                  <div className="flex items-center gap-3">
+                    <Users className="w-4 h-4 text-muted-foreground" />
+                    <div>
+                      <p className="font-medium">{country.country}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {country.ipCount} IPs • {country.emailCount.toLocaleString()} emails
+                      </p>
+                    </div>
+                  </div>
+                  <Badge variant={country.successRate >= 80 ? "default" : country.successRate >= 60 ? "secondary" : "destructive"}>
+                    {country.successRate}% success
+                  </Badge>
+                </div>
+              ))
+            )}
           </div>
         </CardContent>
       </Card>

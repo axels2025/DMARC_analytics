@@ -191,6 +191,34 @@ const OverviewCharts = ({ selectedDomain }: OverviewChartsProps) => {
     return null;
   };
 
+  // Function to truncate provider names for better display
+  const truncateProviderName = (name: string, maxLength: number = 12) => {
+    if (name.length <= maxLength) return name;
+    return name.substring(0, maxLength - 3) + '...';
+  };
+
+  // Custom tick component for better provider name display
+  const CustomXAxisTick = (props: any) => {
+    const { x, y, payload } = props;
+    const truncatedName = truncateProviderName(payload.value);
+    
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text 
+          x={0} 
+          y={0} 
+          dy={16} 
+          textAnchor="end" 
+          fill="#666" 
+          fontSize="11"
+          transform="rotate(-45)"
+        >
+          {truncatedName}
+        </text>
+      </g>
+    );
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Authentication Status Pie Chart */}
@@ -228,13 +256,12 @@ const OverviewCharts = ({ selectedDomain }: OverviewChartsProps) => {
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={providerData}>
+            <BarChart data={providerData} margin={{ top: 5, right: 30, left: 20, bottom: 60 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis 
                 dataKey="provider" 
-                angle={-45}
-                textAnchor="end"
-                height={80}
+                tick={<CustomXAxisTick />}
+                height={60}
                 interval={0}
               />
               <YAxis />
@@ -243,6 +270,7 @@ const OverviewCharts = ({ selectedDomain }: OverviewChartsProps) => {
                   name === 'emails' ? value.toLocaleString() : `${value}%`,
                   name === 'emails' ? 'Emails' : 'Success Rate'
                 ]}
+                labelFormatter={(label) => `Provider: ${label}`}
               />
               <Bar dataKey="emails" fill="#3b82f6" />
             </BarChart>

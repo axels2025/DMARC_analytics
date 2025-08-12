@@ -218,16 +218,73 @@ const Dashboard = () => {
 
       {/* Main Content Tabs */}
       <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-7 lg:w-auto">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
-          <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          <TabsTrigger value="recipients">Recipients</TabsTrigger>
-          <TabsTrigger value="auth-patterns">Authentication</TabsTrigger>
-          <TabsTrigger value="ip-intelligence">IP Intel</TabsTrigger>
-          <TabsTrigger value="policy">Policy</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-        </TabsList>
+        <div className="w-full overflow-hidden border border-gray-200 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100 p-1">
+          <TabsList className="flex overflow-x-auto scrollbar-hide w-full gap-1 bg-transparent h-auto p-1 scroll-smooth">
+            {/* Core Group */}
+            <TabsTrigger 
+              value="overview" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-blue-600 data-[state=active]:border data-[state=active]:border-blue-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Overview
+            </TabsTrigger>
+            <TabsTrigger 
+              value="reports" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-blue-600 data-[state=active]:border data-[state=active]:border-blue-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Reports
+            </TabsTrigger>
+            
+            {/* Divider */}
+            <div className="flex items-center mx-3 flex-shrink-0">
+              <div className="w-px h-8 bg-gradient-to-b from-transparent via-gray-400 to-transparent"></div>
+            </div>
+            
+            {/* Analytics Group */}
+            <TabsTrigger 
+              value="analytics" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-green-600 data-[state=active]:border data-[state=active]:border-green-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Analytics
+            </TabsTrigger>
+            <TabsTrigger 
+              value="recipients" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-green-600 data-[state=active]:border data-[state=active]:border-green-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Recipients
+            </TabsTrigger>
+            <TabsTrigger 
+              value="auth-patterns" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-green-600 data-[state=active]:border data-[state=active]:border-green-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Authentication
+            </TabsTrigger>
+            
+            {/* Divider */}
+            <div className="flex items-center mx-3 flex-shrink-0">
+              <div className="w-px h-8 bg-gradient-to-b from-transparent via-gray-400 to-transparent"></div>
+            </div>
+            
+            {/* Intelligence Group */}
+            <TabsTrigger 
+              value="ip-intelligence" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-purple-600 data-[state=active]:border data-[state=active]:border-purple-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              IP Intel
+            </TabsTrigger>
+            <TabsTrigger 
+              value="policy" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-purple-600 data-[state=active]:border data-[state=active]:border-purple-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Policy
+            </TabsTrigger>
+            <TabsTrigger 
+              value="security" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-purple-600 data-[state=active]:border data-[state=active]:border-purple-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Security
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="overview" className="space-y-6">
           <OverviewCharts selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
