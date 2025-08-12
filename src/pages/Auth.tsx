@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Shield, Mail, Lock, AlertCircle } from "lucide-react";
+import { Mail, Lock, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -98,9 +98,16 @@ const Auth = () => {
       <div className="w-full max-w-md">
         <Card>
           <CardHeader className="text-center">
-            <div className="mx-auto w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4">
-              <Shield className="w-6 h-6 text-blue-600" />
-            </div>
+            <img
+              src="/lovable-uploads/b10f0522-bacd-438e-bf24-82adf2452ab5.png"
+              alt="DMARC Analytics Logo"
+              className="mx-auto h-16 sm:h-20 md:h-24 w-auto mb-2"
+              loading="eager"
+              onError={(e) => {
+                const img = e.currentTarget as HTMLImageElement;
+                if (!img.src.includes('placeholder.svg')) img.src = '/placeholder.svg';
+              }}
+            />
             <CardTitle className="text-2xl">DMARC Analytics</CardTitle>
             <p className="text-gray-600 text-sm">Sign in to access your dashboard</p>
           </CardHeader>
