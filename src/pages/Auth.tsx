@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Mail, Lock, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 const Auth = () => {
   const [email, setEmail] = useState("");
@@ -93,6 +94,31 @@ const Auth = () => {
     setLoading(false);
   };
 
+  const handleForgotPassword = async () => {
+    if (!email || !email.includes('@')) {
+      setError('Enter your email to reset your password');
+      return;
+    }
+    try {
+      setError("");
+      setLoading(true);
+      const redirectTo = `${window.location.origin}/reset-password`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) {
+        setError(error.message);
+      } else {
+        toast({
+          title: "Password reset email sent",
+          description: "Check your inbox for the link to reset your password.",
+        });
+      }
+    } catch (err) {
+      setError('Failed to send password reset email');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
@@ -109,7 +135,7 @@ const Auth = () => {
               }}
             />
             <CardTitle className="text-2xl">DMARC Analytics</CardTitle>
-            <p className="text-gray-600 text-sm">Sign in to access your dashboard</p>
+            <p className="text-gray-600 text-sm">Sign in or sign up to access your dashboard</p>
           </CardHeader>
           <CardContent>
             <Tabs defaultValue="signin" className="w-full">
@@ -150,6 +176,11 @@ const Auth = () => {
                         required
                       />
                     </div>
+                  </div>
+                  <div className="text-right">
+                    <Button type="button" variant="link" className="px-0" onClick={handleForgotPassword}>
+                      Forgot password?
+                    </Button>
                   </div>
 
                   {error && (
