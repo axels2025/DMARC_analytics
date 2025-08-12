@@ -36,7 +36,7 @@ const Layout = ({ children }: LayoutProps) => {
           <div className="flex items-center gap-3">
             <Link to="/dashboard" className="flex items-center gap-3">
               <img
-                src="/lovable-uploads/a71f79ba-2fdb-4d01-aaaa-7f1894490d08.png"
+                src="/lovable-uploads/b10f0522-bacd-438e-bf24-82adf2452ab5.png"
                 alt="DMARC Analytics Logo"
                 className="h-8 w-auto"
                 loading="eager"
