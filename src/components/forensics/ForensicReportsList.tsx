@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Table,
   TableBody,
@@ -10,8 +10,11 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { 
   Eye,
+  EyeOff,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -20,10 +23,21 @@ import {
   Shield,
   AlertTriangle,
   Loader,
-  RefreshCw
+  RefreshCw,
+  Settings,
+  Lock
 } from 'lucide-react';
 import { ForensicRecord } from '@/hooks/useForensicData';
 import { getFailureTypeColor, formatTimestamp } from '@/utils/privacyProtection';
+import { 
+  PrivacySettings,
+  MaskingOptions,
+  DEFAULT_PRIVACY_SETTINGS,
+  DEFAULT_MASKING_OPTIONS,
+  applyPrivacySettings
+} from '@/utils/privacyManager';
+import { logDataAccess, logTemporaryReveal } from '@/utils/privacyAudit';
+import { useAuth } from '@/hooks/useAuth';
 
 interface ForensicReportsListProps {
   records: ForensicRecord[];
@@ -33,6 +47,9 @@ interface ForensicReportsListProps {
   onLoadMore: () => void;
   onRecordClick: (record: ForensicRecord) => void;
   onRefresh: () => void;
+  privacySettings?: PrivacySettings;
+  maskingOptions?: MaskingOptions;
+  onPrivacySettingsChange?: (settings: PrivacySettings) => void;
 }
 
 const ForensicReportsList = ({
@@ -43,8 +60,15 @@ const ForensicReportsList = ({
   onLoadMore,
   onRecordClick,
   onRefresh,
+  privacySettings = DEFAULT_PRIVACY_SETTINGS,
+  maskingOptions = DEFAULT_MASKING_OPTIONS,
+  onPrivacySettingsChange,
 }: ForensicReportsListProps) => {
+  const { user } = useAuth();
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [showPrivacyControls, setShowPrivacyControls] = useState(false);
+  const [revealedFields, setRevealedFields] = useState<Map<string, Set<string>>>(new Map());
+  const [revealTimers, setRevealTimers] = useState<Map<string, NodeJS.Timeout>>(new Map());
 
   const toggleRowExpansion = (recordId: string) => {
     const newExpanded = new Set(expandedRows);
@@ -52,9 +76,86 @@ const ForensicReportsList = ({
       newExpanded.delete(recordId);
     } else {
       newExpanded.add(recordId);
+      // Log data access when expanding row
+      if (user) {
+        logDataAccess(user.id, 'forensic_report', recordId, {
+          action: 'expand_details',
+          privacyLevel: privacySettings.maskingLevel
+        });
+      }
     }
     setExpandedRows(newExpanded);
   };
+
+  // Handle temporary reveal
+  const handleTemporaryReveal = (recordId: string, field: string, duration: number = 15000) => {
+    if (!privacySettings.allowTemporaryReveal) return;
+
+    // Clear existing timer for this record/field
+    const timerKey = `${recordId}-${field}`;
+    const existingTimer = revealTimers.get(timerKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    // Add to revealed fields
+    const currentRevealed = revealedFields.get(recordId) || new Set();
+    currentRevealed.add(field);
+    setRevealedFields(prev => new Map(prev.set(recordId, currentRevealed)));
+
+    // Set timer to hide again
+    const timer = setTimeout(() => {
+      setRevealedFields(prev => {
+        const newMap = new Map(prev);
+        const recordFields = newMap.get(recordId) || new Set();
+        recordFields.delete(field);
+        if (recordFields.size === 0) {
+          newMap.delete(recordId);
+        } else {
+          newMap.set(recordId, recordFields);
+        }
+        return newMap;
+      });
+      setRevealTimers(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(timerKey);
+        return newMap;
+      });
+    }, duration);
+
+    setRevealTimers(prev => new Map(prev.set(timerKey, timer)));
+
+    // Log the temporary reveal
+    if (user) {
+      logTemporaryReveal(user.id, 'forensic_report', recordId, duration);
+    }
+  };
+
+  // Apply privacy settings to a record
+  const applyPrivacyToRecord = (record: ForensicRecord) => {
+    const mockForensicData = {
+      envelope_from: record.maskedFrom,
+      envelope_to: record.maskedTo,
+      header_from: record.maskedFrom,
+      subject: record.truncatedSubject,
+      original_headers: '', // Headers not available in list view
+      message_body: '', // Content not available in list view
+    };
+
+    return applyPrivacySettings(mockForensicData, privacySettings, maskingOptions);
+  };
+
+  // Check if field is revealed for a record
+  const isFieldRevealed = (recordId: string, field: string): boolean => {
+    return revealedFields.get(recordId)?.has(field) || false;
+  };
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      revealTimers.forEach(timer => clearTimeout(timer));
+    };
+  }, [revealTimers]);
 
   const getFailureBadge = (record: ForensicRecord) => {
     const color = getFailureTypeColor(record.authFailure);
@@ -123,12 +224,78 @@ const ForensicReportsList = ({
             <AlertTriangle className="h-5 w-5" />
             Failed Email Attempts
             <Badge variant="secondary">{totalCount.toLocaleString()}</Badge>
+            {!privacySettings.showEmailAddresses && (
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Lock className="h-3 w-3" />
+                Privacy Protected
+              </Badge>
+            )}
           </CardTitle>
-          <Button onClick={onRefresh} variant="outline" size="sm">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {onPrivacySettingsChange && (
+              <Button
+                onClick={() => setShowPrivacyControls(!showPrivacyControls)}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-2"
+              >
+                <Settings className="h-4 w-4" />
+                Privacy
+              </Button>
+            )}
+            <Button onClick={onRefresh} variant="outline" size="sm">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+          </div>
         </div>
+        {showPrivacyControls && onPrivacySettingsChange && (
+          <div className="mt-4 p-4 border rounded-lg space-y-3">
+            <h4 className="font-medium text-sm">Quick Privacy Controls</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-emails"
+                  checked={privacySettings.showEmailAddresses}
+                  onCheckedChange={(checked) =>
+                    onPrivacySettingsChange({ ...privacySettings, showEmailAddresses: checked })
+                  }
+                />
+                <Label htmlFor="show-emails" className="text-sm">Show Emails</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-subjects"
+                  checked={privacySettings.showSubjects}
+                  onCheckedChange={(checked) =>
+                    onPrivacySettingsChange({ ...privacySettings, showSubjects: checked })
+                  }
+                />
+                <Label htmlFor="show-subjects" className="text-sm">Show Subjects</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="allow-reveal"
+                  checked={privacySettings.allowTemporaryReveal}
+                  onCheckedChange={(checked) =>
+                    onPrivacySettingsChange({ ...privacySettings, allowTemporaryReveal: checked })
+                  }
+                />
+                <Label htmlFor="allow-reveal" className="text-sm">Temp Reveal</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="audit-access"
+                  checked={privacySettings.auditDataAccess}
+                  onCheckedChange={(checked) =>
+                    onPrivacySettingsChange({ ...privacySettings, auditDataAccess: checked })
+                  }
+                />
+                <Label htmlFor="audit-access" className="text-sm">Audit Access</Label>
+              </div>
+            </div>
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         <div className="rounded-md border">
@@ -179,18 +346,60 @@ const ForensicReportsList = ({
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Mail className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm truncate max-w-[200px]" title={record.maskedFrom}>
-                          {record.maskedFrom}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm truncate max-w-[180px]" title={record.maskedFrom}>
+                            {isFieldRevealed(record.id, 'from') 
+                              ? record.maskedFrom 
+                              : applyPrivacyToRecord(record).envelope_from}
+                          </span>
+                          {privacySettings.allowTemporaryReveal && !privacySettings.showEmailAddresses && (
+                            <Button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleTemporaryReveal(record.id, 'from');
+                              }}
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0 opacity-50 hover:opacity-100"
+                            >
+                              {isFieldRevealed(record.id, 'from') ? (
+                                <EyeOff className="h-3 w-3" />
+                              ) : (
+                                <Eye className="h-3 w-3" />
+                              )}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span 
-                        className="text-sm truncate max-w-[250px] block" 
-                        title={record.truncatedSubject}
-                      >
-                        {record.truncatedSubject || '[No Subject]'}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <span 
+                          className="text-sm truncate max-w-[220px] block" 
+                          title={record.truncatedSubject}
+                        >
+                          {isFieldRevealed(record.id, 'subject')
+                            ? record.truncatedSubject || '[No Subject]'
+                            : applyPrivacyToRecord(record).subject || '[No Subject]'}
+                        </span>
+                        {privacySettings.allowTemporaryReveal && !privacySettings.showSubjects && (
+                          <Button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTemporaryReveal(record.id, 'subject');
+                            }}
+                            variant="ghost"
+                            size="sm"
+                            className="h-4 w-4 p-0 opacity-50 hover:opacity-100"
+                          >
+                            {isFieldRevealed(record.id, 'subject') ? (
+                              <EyeOff className="h-3 w-3" />
+                            ) : (
+                              <Eye className="h-3 w-3" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {getFailureBadge(record)}
@@ -236,9 +445,27 @@ const ForensicReportsList = ({
                             </div>
                             <div>
                               <h4 className="font-medium text-sm mb-1">To</h4>
-                              <p className="text-sm text-muted-foreground">
-                                {record.maskedTo || '[Not Available]'}
-                              </p>
+                              <div className="flex items-center gap-1">
+                                <p className="text-sm text-muted-foreground">
+                                  {isFieldRevealed(record.id, 'to') 
+                                    ? record.maskedTo || '[Not Available]'
+                                    : applyPrivacyToRecord(record).envelope_to || '[Not Available]'}
+                                </p>
+                                {privacySettings.allowTemporaryReveal && !privacySettings.showEmailAddresses && record.maskedTo && (
+                                  <Button
+                                    onClick={() => handleTemporaryReveal(record.id, 'to')}
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-4 w-4 p-0 opacity-50 hover:opacity-100"
+                                  >
+                                    {isFieldRevealed(record.id, 'to') ? (
+                                      <EyeOff className="h-3 w-3" />
+                                    ) : (
+                                      <Eye className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                             <div>
                               <h4 className="font-medium text-sm mb-1">Message ID</h4>

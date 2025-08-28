@@ -228,6 +228,9 @@ const ForensicDashboard = () => {
                 onLoadMore={loadMore}
                 onRecordClick={handleRecordClick}
                 onRefresh={refetch}
+                privacySettings={privacySettings}
+                maskingOptions={maskingOptions}
+                onPrivacySettingsChange={handlePrivacySettingsChange}
               />
             </div>
           </div>
@@ -269,13 +272,16 @@ const ForensicDashboard = () => {
       </Tabs>
 
       {/* Detail Modal */}
-      <ForensicDetailModal
+      <ForensicDetailModalPrivacy
         record={selectedRecord}
         isOpen={showDetailModal}
         onClose={() => {
           setShowDetailModal(false);
           setSelectedRecord(null);
         }}
+        privacySettings={privacySettings}
+        maskingOptions={maskingOptions}
+        onPrivacySettingsChange={handlePrivacySettingsChange}
       />
     </div>
   );
