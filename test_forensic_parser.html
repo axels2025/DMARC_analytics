@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Forensic Parser Test</title>
+</head>
+<body>
+    <h1>Testing Forensic Parser Functions</h1>
+    <div id="results"></div>
+    
+    <script type="module">
+        // Simple test XML for forensic report
+        const testForensicXml = `<?xml version="1.0"?>
+<feedback>
+    <version>1.0</version>
+    <report_metadata>
+        <org_name>Example Corp</org_name>
+        <email>dmarc@example.com</email>
+        <report_id>12345</report_id>
+        <date_range>
+            <begin>1734000000</begin>
+            <end>1734086400</end>
+        </date_range>
+    </report_metadata>
+    <policy_published>
+        <domain>example.com</domain>
+        <adkim>r</adkim>
+        <aspf>r</aspf>
+        <p>quarantine</p>
+        <sp>reject</sp>
+        <pct>100</pct>
+    </policy_published>
+    <record>
+        <row>
+            <source_ip>192.0.2.1</source_ip>
+            <count>1</count>
+            <policy_evaluated>
+                <disposition>quarantine</disposition>
+                <dkim>fail</dkim>
+                <spf>pass</spf>
+            </policy_evaluated>
+        </row>
+        <identifiers>
+            <header_from>example.com</header_from>
+            <envelope_from>sender@example.com</envelope_from>
+            <envelope_to>recipient@example.com</envelope_to>
+        </identifiers>
+        <auth_results>
+            <spf>
+                <domain>example.com</domain>
+                <result>pass</result>
+            </spf>
+            <dkim>
+                <domain>example.com</domain>
+                <result>fail</result>
+                <selector>selector1</selector>
+            </dkim>
+        </auth_results>
+        <forensic_data>
+            <arrival_date>1734043200</arrival_date>
+            <message_id>message-id@example.com</message_id>
+            <subject>Suspicious email subject with sensitive data 1234-5678-9012-3456</subject>
+            <original_headers>Return-Path: &lt;sender@example.com&gt;
+From: sender@example.com
+To: recipient@example.com
+Subject: Test email
+Authorization: Bearer secret_token_12345</original_headers>
+            <message_body>This is the email body content that should be truncated and sanitized. It contains some sensitive information like email@domain.com and phone number 123-456-7890.</message_body>
+        </forensic_data>
+    </record>
+</feedback>`;
+
+        // Import our parser functions (this would need to be adapted for actual module imports)
+        const resultsDiv = document.getElementById('results');
+        
+        resultsDiv.innerHTML = '<h2>Test Results</h2>';
+        resultsDiv.innerHTML += '<h3>Sample Forensic XML:</h3>';
+        resultsDiv.innerHTML += '<pre>' + testForensicXml + '</pre>';
+        
+        resultsDiv.innerHTML += '<h3>Test completed - check console for detailed results</h3>';
+        resultsDiv.innerHTML += '<p>Open browser console to see parser function outputs and validation results.</p>';
+        
+        console.log('Testing forensic XML parser functions...');
+        console.log('Sample XML length:', testForensicXml.length);
+        console.log('XML contains required elements:', 
+                    testForensicXml.includes('<forensic_data>'),
+                    testForensicXml.includes('<arrival_date>'));
+    </script>
+</body>
+</html>

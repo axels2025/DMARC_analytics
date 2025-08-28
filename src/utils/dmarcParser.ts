@@ -46,6 +46,77 @@ export interface DmarcRecord {
   };
 }
 
+// Forensic report interfaces
+export interface ForensicReport {
+  reportMetadata: ReportMetadata;
+  policyPublished: PolicyPublished;
+  records: ForensicRecord[];
+}
+
+export interface ReportMetadata {
+  orgName: string;
+  email: string;
+  reportId: string;
+  dateRange: {
+    begin: number;
+    end: number;
+  };
+}
+
+export interface PolicyPublished {
+  domain: string;
+  dkim: string;
+  spf: string;
+  p: string;
+  sp?: string;
+  pct?: number;
+}
+
+export interface ForensicRecord {
+  row: ForensicRow;
+  identifiers: ForensicIdentifiers;
+  authResults: AuthResults;
+  forensicData: ForensicData;
+}
+
+export interface ForensicRow {
+  sourceIp: string;
+  count: number;
+  policyEvaluated: PolicyEvaluated;
+}
+
+export interface PolicyEvaluated {
+  disposition: string;
+  dkim: string;
+  spf: string;
+}
+
+export interface ForensicIdentifiers {
+  headerFrom: string;
+  envelopeFrom?: string;
+  envelopeTo?: string;
+}
+
+export interface AuthResults {
+  dkim?: Array<{
+    domain: string;
+    selector?: string;
+    result: string;
+  }>;
+  spf?: Array<{
+    domain: string;
+    result: string;
+  }>;
+}
+
+export interface ForensicData {
+  arrivalDate: number;
+  messageId?: string;
+  subject?: string; // Masked/truncated
+  originalHeaders?: string;
+  messageBody?: string; // Optional, encrypted
+}
+
 // Input validation and sanitization functions
 function sanitizeText(text: string, maxLength: number = 1000): string {
   if (!text) return '';
@@ -146,6 +217,150 @@ function validateNumeric(value: string, min: number = 0, max: number = Number.MA
   return parsed;
 }
 
+// Privacy protection utility functions for forensic reports
+function maskEmailAddress(email: string): string {
+  if (!email) return '';
+  
+  const sanitized = sanitizeText(email, 254);
+  if (!sanitized) return '';
+  
+  // Split email at @ symbol
+  const atIndex = sanitized.lastIndexOf('@');
+  if (atIndex === -1 || atIndex === 0) return sanitized; // Invalid email format
+  
+  const localPart = sanitized.substring(0, atIndex);
+  const domain = sanitized.substring(atIndex + 1);
+  
+  // Mask local part: keep first and last character if long enough
+  let maskedLocal = localPart;
+  if (localPart.length > 2) {
+    const firstChar = localPart.charAt(0);
+    const lastChar = localPart.charAt(localPart.length - 1);
+    const maskLength = Math.max(1, localPart.length - 2);
+    maskedLocal = firstChar + '*'.repeat(maskLength) + lastChar;
+  } else if (localPart.length === 2) {
+    maskedLocal = localPart.charAt(0) + '*';
+  }
+  // Single character local parts remain unmasked for functionality
+  
+  return `${maskedLocal}@${domain}`;
+}
+
+function sanitizeSubject(subject: string): string {
+  if (!subject) return '';
+  
+  // Clean and truncate subject line
+  let cleaned = sanitizeText(subject, 500);
+  
+  // Remove potentially sensitive patterns (credit card, SSN, etc.)
+  // Remove sequences that look like credit card numbers
+  cleaned = cleaned.replace(/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g, '[REDACTED]');
+  
+  // Remove sequences that look like SSNs
+  cleaned = cleaned.replace(/\b\d{3}-?\d{2}-?\d{4}\b/g, '[REDACTED]');
+  
+  // Remove email addresses from subject
+  cleaned = cleaned.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL]');
+  
+  // Remove potential phone numbers
+  cleaned = cleaned.replace(/\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g, '[PHONE]');
+  
+  // Truncate to maximum 100 characters for privacy
+  if (cleaned.length > 100) {
+    cleaned = cleaned.substring(0, 97) + '...';
+  }
+  
+  return cleaned;
+}
+
+function sanitizeHeaders(headers: string): string {
+  if (!headers) return '';
+  
+  let cleaned = sanitizeText(headers, 10000); // Allow larger size for headers
+  
+  // List of sensitive headers to remove completely
+  const sensitiveHeaders = [
+    'authorization',
+    'cookie',
+    'set-cookie',
+    'x-auth',
+    'x-api-key',
+    'x-session',
+    'x-token',
+    'www-authenticate',
+    'proxy-authenticate',
+    'proxy-authorization'
+  ];
+  
+  // Remove sensitive headers (case insensitive)
+  for (const header of sensitiveHeaders) {
+    const regex = new RegExp(`^${header}:.*$`, 'gmi');
+    cleaned = cleaned.replace(regex, `${header}: [REDACTED]`);
+  }
+  
+  // Mask email addresses in headers
+  cleaned = cleaned.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, (match) => {
+    return maskEmailAddress(match);
+  });
+  
+  // Remove potential authentication tokens/hashes (long alphanumeric strings)
+  cleaned = cleaned.replace(/\b[A-Za-z0-9+/]{32,}\b/g, '[TOKEN]');
+  
+  return cleaned;
+}
+
+function truncateContent(content: string, maxLength: number): string {
+  if (!content) return '';
+  
+  const sanitized = sanitizeText(content, maxLength + 100); // Allow slight buffer for processing
+  
+  if (sanitized.length <= maxLength) {
+    return sanitized;
+  }
+  
+  // Truncate at word boundary if possible
+  const truncated = sanitized.substring(0, maxLength - 3);
+  const lastSpace = truncated.lastIndexOf(' ');
+  
+  if (lastSpace > maxLength * 0.8) { // If word boundary is reasonably close
+    return truncated.substring(0, lastSpace) + '...';
+  }
+  
+  return truncated + '...';
+}
+
+function validateMessageId(messageId: string): string {
+  if (!messageId) return '';
+  
+  const sanitized = sanitizeText(messageId, 500);
+  
+  // Basic validation: Message-ID should contain @ symbol and be reasonably formatted
+  if (sanitized && !sanitized.includes('@')) {
+    console.warn(`[validateMessageId] Message ID may be malformed: ${sanitized}`);
+  }
+  
+  return sanitized;
+}
+
+function validateTimestamp(timestamp: string, fieldName: string): number {
+  const parsed = validateNumeric(timestamp, 0);
+  
+  // Check if timestamp is reasonable (not in distant future or past)
+  const now = Math.floor(Date.now() / 1000);
+  const maxAge = 365 * 24 * 60 * 60; // 1 year
+  const maxFuture = 24 * 60 * 60; // 1 day
+  
+  if (parsed < now - maxAge) {
+    console.warn(`[validateTimestamp] ${fieldName} timestamp seems too old: ${parsed}`);
+  }
+  
+  if (parsed > now + maxFuture) {
+    console.warn(`[validateTimestamp] ${fieldName} timestamp seems too far in future: ${parsed}`);
+  }
+  
+  return parsed;
+}
+
 // Helper function to get text content from XML element with validation
 function getTextContent(element: Element | null): string {
   const content = element?.textContent?.trim() || '';
@@ -229,6 +444,75 @@ function validateXmlStructure(doc: Document): void {
   }
   
   console.log(`[validateXmlStructure] Structure validation completed for ${records.length} records`);
+}
+
+// Validate forensic XML document structure
+function validateForensicStructure(doc: Document): void {
+  console.log(`[validateForensicStructure] Validating forensic document structure`);
+  
+  const feedback = doc.getElementsByTagName('feedback')[0];
+  if (!feedback) {
+    throw new Error('Missing required feedback element');
+  }
+  
+  // Check for required top-level elements
+  const requiredElements = ['report_metadata', 'policy_published'];
+  for (const elementName of requiredElements) {
+    const elements = feedback.getElementsByTagName(elementName);
+    if (elements.length === 0) {
+      throw new Error(`Missing required element: ${elementName}`);
+    }
+  }
+  
+  // Check for at least one record
+  const records = feedback.getElementsByTagName('record');
+  if (records.length === 0) {
+    throw new Error('Forensic report contains no records');
+  }
+  
+  // Validate each record has required forensic structure
+  for (let i = 0; i < Math.min(records.length, 5); i++) { // Sample fewer records for forensic (they're larger)
+    const record = records[i];
+    const requiredRecordElements = ['row', 'identifiers', 'auth_results'];
+    
+    for (const elementName of requiredRecordElements) {
+      const elements = record.getElementsByTagName(elementName);
+      if (elements.length === 0) {
+        throw new Error(`Forensic record ${i + 1} missing required element: ${elementName}`);
+      }
+    }
+    
+    // Check for forensic-specific data
+    const forensicData = record.getElementsByTagName('forensic_data')[0];
+    if (!forensicData) {
+      throw new Error(`Forensic record ${i + 1} missing required forensic_data element`);
+    }
+    
+    // Validate arrival_date exists in forensic data
+    const arrivalDate = forensicData.getElementsByTagName('arrival_date')[0];
+    if (!arrivalDate) {
+      throw new Error(`Forensic record ${i + 1} missing required arrival_date in forensic_data`);
+    }
+    
+    // Check for reasonable content sizes to prevent DoS
+    const messageBody = forensicData.getElementsByTagName('message_body')[0];
+    if (messageBody && messageBody.textContent) {
+      const bodyLength = messageBody.textContent.length;
+      if (bodyLength > 100000) { // 100KB limit
+        console.warn(`[validateForensicStructure] Record ${i + 1} has very large message body (${bodyLength} chars)`);
+      }
+    }
+    
+    const originalHeaders = forensicData.getElementsByTagName('original_headers')[0];
+    if (originalHeaders && originalHeaders.textContent) {
+      const headersLength = originalHeaders.textContent.length;
+      if (headersLength > 50000) { // 50KB limit
+        console.warn(`[validateForensicStructure] Record ${i + 1} has very large headers (${headersLength} chars)`);
+      }
+    }
+  }
+  
+  console.log(`[validateForensicStructure] Forensic structure validation completed for ${records.length} records`);
 }
 
 export async function parseDmarcXml(xmlContent: string): Promise<DmarcReport> {
@@ -493,5 +777,353 @@ export function validateDmarcXml(xmlContent: string): { isValid: boolean; error?
     return { isValid: true };
   } catch (error) {
     return { isValid: false, error: 'Invalid XML format' };
+  }
+}
+
+export function validateForensicXml(xmlContent: string): { isValid: boolean; error?: string } {
+  try {
+    console.log(`[validateForensicXml] Starting forensic XML validation`);
+    
+    // Basic size check to prevent DoS attacks
+    if (xmlContent.length > 1000000) { // 1MB limit for forensic reports
+      return { isValid: false, error: 'Forensic report too large (exceeds 1MB limit)' };
+    }
+    
+    // Sanitize XML content first
+    const sanitizedXml = sanitizeXmlContent(xmlContent);
+    
+    // Parse the XML to check if it's valid
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(sanitizedXml, 'application/xml');
+    
+    // Check for XML parsing errors
+    const parserError = doc.getElementsByTagName('parsererror')[0];
+    if (parserError) {
+      return { isValid: false, error: 'Invalid XML format' };
+    }
+
+    // Check for feedback element (root element for DMARC reports)
+    const feedback = doc.getElementsByTagName('feedback')[0];
+    if (!feedback) {
+      return { isValid: false, error: 'Not a valid DMARC forensic report XML file' };
+    }
+
+    // Check for required elements
+    const requiredElements = ['report_metadata', 'policy_published', 'record'];
+    for (const element of requiredElements) {
+      const elements = doc.getElementsByTagName(element);
+      if (elements.length === 0) {
+        return { isValid: false, error: `Missing required element: ${element}` };
+      }
+    }
+
+    // Additional validation for key metadata
+    const reportMetadata = doc.getElementsByTagName('report_metadata')[0];
+    if (reportMetadata) {
+      const orgName = reportMetadata.getElementsByTagName('org_name')[0];
+      const reportId = reportMetadata.getElementsByTagName('report_id')[0];
+      if (!orgName || !reportId) {
+        return { isValid: false, error: 'Missing required report metadata (org_name or report_id)' };
+      }
+    }
+
+    // Check for forensic-specific elements
+    const records = doc.getElementsByTagName('record');
+    if (records.length === 0) {
+      return { isValid: false, error: 'No forensic records found in report' };
+    }
+
+    // Validate at least one record has forensic data
+    let hasForensicData = false;
+    for (let i = 0; i < Math.min(records.length, 3); i++) { // Check first 3 records
+      const record = records[i];
+      const forensicData = record.getElementsByTagName('forensic_data')[0];
+      if (forensicData) {
+        const arrivalDate = forensicData.getElementsByTagName('arrival_date')[0];
+        if (arrivalDate && arrivalDate.textContent) {
+          hasForensicData = true;
+          break;
+        }
+      }
+    }
+
+    if (!hasForensicData) {
+      return { isValid: false, error: 'No valid forensic data found in records' };
+    }
+
+    // Additional forensic-specific validation
+    try {
+      validateForensicStructure(doc);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Forensic structure validation failed';
+      return { isValid: false, error: errorMessage };
+    }
+
+    console.log(`[validateForensicXml] Forensic XML validation completed successfully`);
+    return { isValid: true };
+  } catch (error) {
+    console.error(`[validateForensicXml] Validation failed:`, error);
+    const errorMessage = error instanceof Error ? error.message : 'Invalid XML format';
+    return { isValid: false, error: errorMessage };
+  }
+}
+
+export async function parseForensicXml(xmlContent: string): Promise<ForensicReport> {
+  console.log(`[parseForensicXml] Starting forensic XML parsing (${xmlContent.length} characters)`);
+  
+  try {
+    // Basic size check to prevent DoS attacks
+    if (xmlContent.length > 1000000) { // 1MB limit for forensic reports
+      throw new Error('Forensic report too large (exceeds 1MB limit)');
+    }
+    
+    // Sanitize XML content to prevent XXE attacks
+    const sanitizedXml = sanitizeXmlContent(xmlContent);
+    console.log(`[parseForensicXml] XML sanitized successfully`);
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(sanitizedXml, 'application/xml');
+    
+    // Check for XML parsing errors
+    const parserError = doc.getElementsByTagName('parsererror')[0];
+    if (parserError) {
+      console.error(`[parseForensicXml] XML parser error:`, parserError.textContent);
+      throw new Error(`XML parsing failed: ${parserError.textContent}`);
+    }
+
+    const feedback = doc.getElementsByTagName('feedback')[0];
+    if (!feedback) {
+      console.error(`[parseForensicXml] Missing feedback element in XML structure`);
+      throw new Error('Invalid forensic report: Missing feedback element');
+    }
+    
+    console.log(`[parseForensicXml] Found feedback element, extracting components`);
+
+    // Validate document structure before parsing
+    validateForensicStructure(doc);
+    console.log(`[parseForensicXml] Forensic XML structure validation passed`);
+
+    // Extract report metadata
+    const reportMetadata = getFirstChildElement(feedback, 'report_metadata');
+    if (!reportMetadata) {
+      throw new Error('Invalid forensic report: Missing report_metadata');
+    }
+
+    // Extract policy published
+    const policyPublished = getFirstChildElement(feedback, 'policy_published');
+    if (!policyPublished) {
+      throw new Error('Invalid forensic report: Missing policy_published');
+    }
+
+    // Extract records
+    const recordElements = getChildElements(feedback, 'record');
+    if (recordElements.length === 0) {
+      throw new Error('Invalid forensic report: Missing record data');
+    }
+
+    // Parse date range with validation
+    const dateRange = getFirstChildElement(reportMetadata, 'date_range');
+    if (!dateRange) {
+      throw new Error('Missing date_range in report metadata');
+    }
+    
+    const dateRangeBeginElement = getFirstChildElement(dateRange, 'begin');
+    const dateRangeEndElement = getFirstChildElement(dateRange, 'end');
+    
+    if (!dateRangeBeginElement || !dateRangeEndElement) {
+      throw new Error('Missing begin or end date in date_range');
+    }
+    
+    const dateRangeBegin = validateTimestamp(getTextContent(dateRangeBeginElement), 'date_range_begin');
+    const dateRangeEnd = validateTimestamp(getTextContent(dateRangeEndElement), 'date_range_end');
+    
+    if (dateRangeBegin >= dateRangeEnd) {
+      throw new Error('Invalid date range: begin date must be before end date');
+    }
+    
+    console.log(`[parseForensicXml] Date range: ${new Date(dateRangeBegin * 1000).toISOString()} to ${new Date(dateRangeEnd * 1000).toISOString()}`);
+
+    const parsedReport: ForensicReport = {
+      reportMetadata: {
+        orgName: sanitizeText(getTextContent(getFirstChildElement(reportMetadata, 'org_name')), 200),
+        email: validateEmail(getTextContent(getFirstChildElement(reportMetadata, 'email'))),
+        reportId: sanitizeText(getTextContent(getFirstChildElement(reportMetadata, 'report_id')), 100),
+        dateRange: {
+          begin: dateRangeBegin,
+          end: dateRangeEnd,
+        },
+      },
+      policyPublished: {
+        domain: validateDomain(getTextContent(getFirstChildElement(policyPublished, 'domain'))),
+        dkim: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'adkim')), 10) || 'r',
+        spf: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'aspf')), 10) || 'r',
+        p: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'p')), 20) || 'none',
+        sp: sanitizeText(getTextContent(getFirstChildElement(policyPublished, 'sp')), 20) || undefined,
+        pct: validateNumeric(getTextContent(getFirstChildElement(policyPublished, 'pct')), 0, 100) || 100,
+      },
+      records: recordElements.map((recordElement: Element, index: number) => {
+        console.log(`[parseForensicXml] Processing forensic record ${index + 1}/${recordElements.length}`);
+        
+        const row = getFirstChildElement(recordElement, 'row');
+        const identifiers = getFirstChildElement(recordElement, 'identifiers');
+        const authResults = getFirstChildElement(recordElement, 'auth_results');
+        const forensicData = getFirstChildElement(recordElement, 'forensic_data');
+        
+        if (!row || !identifiers || !authResults || !forensicData) {
+          throw new Error(`Forensic record ${index + 1} missing required elements (row, identifiers, auth_results, or forensic_data)`);
+        }
+        
+        const policyEvaluated = getFirstChildElement(row, 'policy_evaluated');
+        if (!policyEvaluated) {
+          throw new Error(`Forensic record ${index + 1} missing policy_evaluated element`);
+        }
+
+        // Validate source IP exists and is valid
+        const sourceIpElement = getFirstChildElement(row, 'source_ip');
+        if (!sourceIpElement) {
+          throw new Error(`Forensic record ${index + 1} missing source_ip`);
+        }
+        const sourceIp = validateIpAddress(getTextContent(sourceIpElement));
+
+        // Validate count exists and is reasonable
+        const countElement = getFirstChildElement(row, 'count');
+        const count = countElement ? validateNumeric(getTextContent(countElement), 1, 10) : 1; // Forensic reports typically have count=1
+
+        // Parse identifiers with privacy protection
+        const headerFromElement = getFirstChildElement(identifiers, 'header_from');
+        if (!headerFromElement) {
+          throw new Error(`Forensic record ${index + 1} missing header_from`);
+        }
+        const headerFrom = validateDomain(getTextContent(headerFromElement));
+
+        // Parse envelope addresses with masking
+        const envelopeFromElement = getFirstChildElement(identifiers, 'envelope_from');
+        let envelopeFrom: string | undefined;
+        if (envelopeFromElement) {
+          const envelopeFromText = getTextContent(envelopeFromElement);
+          if (envelopeFromText) {
+            try {
+              envelopeFrom = maskEmailAddress(envelopeFromText);
+            } catch (error) {
+              console.warn(`[parseForensicXml] Record ${index + 1} has invalid envelope_from: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }
+        }
+
+        const envelopeToElement = getFirstChildElement(identifiers, 'envelope_to');
+        let envelopeTo: string | undefined;
+        if (envelopeToElement) {
+          const envelopeToText = getTextContent(envelopeToElement);
+          if (envelopeToText) {
+            try {
+              envelopeTo = maskEmailAddress(envelopeToText);
+            } catch (error) {
+              console.warn(`[parseForensicXml] Record ${index + 1} has invalid envelope_to: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+          }
+        }
+
+        // Parse DKIM results with enhanced validation
+        const dkimElements = authResults ? getChildElements(authResults, 'dkim') : [];
+        const dkimResults = dkimElements.map((dkim: Element, dkimIndex: number) => {
+          const domainElement = getFirstChildElement(dkim, 'domain');
+          const resultElement = getFirstChildElement(dkim, 'result');
+          
+          if (!domainElement || !resultElement) {
+            console.warn(`[parseForensicXml] Record ${index + 1} DKIM ${dkimIndex + 1} missing domain or result, skipping`);
+            return null;
+          }
+
+          try {
+            return {
+              domain: validateDomain(getTextContent(domainElement)),
+              selector: sanitizeText(getTextContent(getFirstChildElement(dkim, 'selector')), 100) || undefined,
+              result: sanitizeText(getTextContent(resultElement), 20) || 'fail',
+            };
+          } catch (error) {
+            console.warn(`[parseForensicXml] Record ${index + 1} DKIM ${dkimIndex + 1} validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+          }
+        }).filter(Boolean);
+
+        // Parse SPF results with enhanced validation
+        const spfElements = authResults ? getChildElements(authResults, 'spf') : [];
+        const spfResults = spfElements.map((spf: Element, spfIndex: number) => {
+          const domainElement = getFirstChildElement(spf, 'domain');
+          const resultElement = getFirstChildElement(spf, 'result');
+          
+          if (!domainElement || !resultElement) {
+            console.warn(`[parseForensicXml] Record ${index + 1} SPF ${spfIndex + 1} missing domain or result, skipping`);
+            return null;
+          }
+
+          try {
+            return {
+              domain: validateDomain(getTextContent(domainElement)),
+              result: sanitizeText(getTextContent(resultElement), 20) || 'fail',
+            };
+          } catch (error) {
+            console.warn(`[parseForensicXml] Record ${index + 1} SPF ${spfIndex + 1} validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return null;
+          }
+        }).filter(Boolean);
+
+        // Parse forensic data with privacy protection
+        const arrivalDateElement = getFirstChildElement(forensicData, 'arrival_date');
+        if (!arrivalDateElement) {
+          throw new Error(`Forensic record ${index + 1} missing required arrival_date`);
+        }
+        const arrivalDate = validateTimestamp(getTextContent(arrivalDateElement), 'arrival_date');
+
+        // Extract and sanitize optional forensic data
+        const messageIdElement = getFirstChildElement(forensicData, 'message_id');
+        const messageId = messageIdElement ? validateMessageId(getTextContent(messageIdElement)) : undefined;
+
+        const subjectElement = getFirstChildElement(forensicData, 'subject');
+        const subject = subjectElement ? sanitizeSubject(getTextContent(subjectElement)) : undefined;
+
+        const originalHeadersElement = getFirstChildElement(forensicData, 'original_headers');
+        const originalHeaders = originalHeadersElement ? sanitizeHeaders(getTextContent(originalHeadersElement)) : undefined;
+
+        const messageBodyElement = getFirstChildElement(forensicData, 'message_body');
+        const messageBody = messageBodyElement ? truncateContent(getTextContent(messageBodyElement), 500) : undefined;
+
+        return {
+          row: {
+            sourceIp,
+            count,
+            policyEvaluated: {
+              disposition: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'disposition')), 20) || 'none',
+              dkim: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'dkim')), 20) || 'fail',
+              spf: sanitizeText(getTextContent(getFirstChildElement(policyEvaluated, 'spf')), 20) || 'fail',
+            },
+          },
+          identifiers: {
+            headerFrom,
+            envelopeFrom,
+            envelopeTo,
+          },
+          authResults: {
+            dkim: dkimResults.length > 0 ? dkimResults : undefined,
+            spf: spfResults.length > 0 ? spfResults : undefined,
+          },
+          forensicData: {
+            arrivalDate,
+            messageId,
+            subject,
+            originalHeaders,
+            messageBody,
+          },
+        };
+      }),
+    };
+
+    console.log(`[parseForensicXml] Successfully parsed forensic report for ${parsedReport.policyPublished.domain} with ${parsedReport.records.length} records`);
+    return parsedReport;
+    
+  } catch (error) {
+    console.error(`[parseForensicXml] Parsing failed:`, error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown parsing error';
+    throw new Error(`Forensic report parsing failed: ${errorMessage}`);
   }
 }
