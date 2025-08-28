@@ -52,6 +52,81 @@ export type Database = {
           },
         ]
       }
+      dmarc_forensic_reports: {
+        Row: {
+          arrival_date: number
+          auth_failure: string
+          created_at: string
+          dkim_result: string | null
+          dmarc_result: string | null
+          domain: string
+          envelope_from: string | null
+          envelope_to: string | null
+          header_from: string | null
+          id: string
+          is_encrypted: boolean | null
+          message_body: string | null
+          message_id: string | null
+          original_headers: string | null
+          policy_evaluated: string | null
+          raw_xml: string | null
+          report_id: string
+          source_ip: unknown
+          spf_result: string | null
+          subject: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          arrival_date: number
+          auth_failure: string
+          created_at?: string
+          dkim_result?: string | null
+          dmarc_result?: string | null
+          domain: string
+          envelope_from?: string | null
+          envelope_to?: string | null
+          header_from?: string | null
+          id?: string
+          is_encrypted?: boolean | null
+          message_body?: string | null
+          message_id?: string | null
+          original_headers?: string | null
+          policy_evaluated?: string | null
+          raw_xml?: string | null
+          report_id: string
+          source_ip: unknown
+          spf_result?: string | null
+          subject?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          arrival_date?: number
+          auth_failure?: string
+          created_at?: string
+          dkim_result?: string | null
+          dmarc_result?: string | null
+          domain?: string
+          envelope_from?: string | null
+          envelope_to?: string | null
+          header_from?: string | null
+          id?: string
+          is_encrypted?: boolean | null
+          message_body?: string | null
+          message_id?: string | null
+          original_headers?: string | null
+          policy_evaluated?: string | null
+          raw_xml?: string | null
+          report_id?: string
+          source_ip?: unknown
+          spf_result?: string | null
+          subject?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       dmarc_records: {
         Row: {
           count: number
