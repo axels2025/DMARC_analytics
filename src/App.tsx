@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
 import ReportDetail from "./pages/ReportDetail";
 import ManageReports from "./pages/ManageReports";
+import ForensicDashboard from "./pages/ForensicDashboard";
 import Auth from "./pages/Auth";
 import ResetPassword from "./pages/ResetPassword";
 import Layout from "./components/Layout";
@@ -68,6 +69,13 @@ const App = () => {
                     <ProtectedRoute>
                       <Layout>
                         <ManageReports />
+                      </Layout>
+                    </ProtectedRoute>
+                  } />
+                  <Route path="/forensics" element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <ForensicDashboard />
                       </Layout>
                     </ProtectedRoute>
                   } />

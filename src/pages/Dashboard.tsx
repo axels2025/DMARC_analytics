@@ -233,6 +233,12 @@ const Dashboard = () => {
             >
               Reports
             </TabsTrigger>
+            <TabsTrigger 
+              value="forensics" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-red-600 data-[state=active]:border data-[state=active]:border-red-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              Forensics
+            </TabsTrigger>
             
             {/* Divider */}
             <div className="flex items-center mx-3 flex-shrink-0">
@@ -300,6 +306,31 @@ const Dashboard = () => {
             </CardHeader>
             <CardContent>
               <RecentReports reports={recentReports} onRefresh={refetch} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="forensics" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+                <span>Forensic Analysis</span>
+                <Badge variant="outline">Coming Soon</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-center py-8">
+              <AlertTriangle className="h-12 w-12 mx-auto text-red-400 mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">Forensic Reports Dashboard</h3>
+              <p className="text-gray-500 mb-4">
+                Detailed analysis of individual email authentication failures will be available here.
+              </p>
+              <Link to="/forensics">
+                <Button>
+                  <Eye className="h-4 w-4 mr-2" />
+                  Go to Forensic Dashboard
+                </Button>
+              </Link>
             </CardContent>
           </Card>
         </TabsContent>
