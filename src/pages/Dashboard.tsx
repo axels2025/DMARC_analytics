@@ -31,6 +31,8 @@ import SecurityMonitoring from "@/components/analytics/SecurityMonitoring";
 import DkimSelectorExplorer from "@/components/analytics/DkimSelectorExplorer";
 import SpfDomainExplorer from "@/components/analytics/SpfDomainExplorer";
 import AlignmentDashboard from "@/components/analytics/AlignmentDashboard";
+import SPFFlattener from "@/components/spf/SPFFlattener";
+import SPFFlatteningHistory from "@/components/spf/SPFFlatteningHistory";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { useSPFHealthMetrics } from "@/hooks/useSPFAnalysis";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
@@ -258,19 +260,39 @@ const Dashboard = () => {
               </div>
               {spfMetrics.averageLookups > 0 && (
                 <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-sm text-blue-800">
-                    <strong>Average DNS Lookups:</strong> {spfMetrics.averageLookups}/10 
-                    {spfMetrics.averageLookups >= 8 && (
-                      <span className="ml-2 text-red-600 font-semibold">
-                        ⚠️ Approaching limit
-                      </span>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <p className="text-sm text-blue-800">
+                        <strong>Average DNS Lookups:</strong> {spfMetrics.averageLookups}/10 
+                        {spfMetrics.averageLookups >= 8 && (
+                          <span className="ml-2 text-red-600 font-semibold">
+                            ⚠️ Approaching limit
+                          </span>
+                        )}
+                      </p>
+                      {spfMetrics.lastAnalyzed && (
+                        <p className="text-xs text-blue-600 mt-1">
+                          Last analyzed: {new Date(spfMetrics.lastAnalyzed).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                    {(spfMetrics.criticalDomains > 0 || spfMetrics.averageLookups >= 8) && (
+                      <Link 
+                        to="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          // Switch to SPF Flattening tab
+                          const spfTab = document.querySelector('[value="spf-flattening"]') as HTMLElement;
+                          spfTab?.click();
+                        }}
+                      >
+                        <Button size="sm" className="bg-orange-600 hover:bg-orange-700">
+                          <TrendingUp className="w-3 h-3 mr-1" />
+                          Optimize SPF
+                        </Button>
+                      </Link>
                     )}
-                  </p>
-                  {spfMetrics.lastAnalyzed && (
-                    <p className="text-xs text-blue-600 mt-1">
-                      Last analyzed: {new Date(spfMetrics.lastAnalyzed).toLocaleString()}
-                    </p>
-                  )}
+                  </div>
                 </div>
               )}
             </div>
@@ -325,6 +347,12 @@ const Dashboard = () => {
               className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-green-600 data-[state=active]:border data-[state=active]:border-green-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
             >
               Authentication
+            </TabsTrigger>
+            <TabsTrigger 
+              value="spf-flattening" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-orange-600 data-[state=active]:border data-[state=active]:border-orange-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              SPF Flattening
             </TabsTrigger>
             
             {/* Divider */}
@@ -411,6 +439,13 @@ const Dashboard = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <DkimSelectorExplorer selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
             <SpfDomainExplorer selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="spf-flattening" className="space-y-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <SPFFlattener selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
+            <SPFFlatteningHistory selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
           </div>
         </TabsContent>
 

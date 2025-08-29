@@ -5,6 +5,13 @@ interface DNSLookupRequest {
   ip?: string;
   domain?: string;
   recordType?: 'TXT' | 'A' | 'MX' | 'PTR';
+  
+  // New fields for SPF flattening
+  spfFlatten?: {
+    domains: string[];
+    recursive: boolean;
+    maxDepth: number;
+  };
 }
 
 interface DNSLookupResponse {
@@ -13,6 +20,18 @@ interface DNSLookupResponse {
   provider?: string;
   records?: string[];
   recordType?: string;
+  
+  // SPF flattening response fields
+  spfFlattening?: {
+    resolvedDomains: Map<string, {
+      ips: string[];
+      nestedIncludes: string[];
+      errors: string[];
+    }>;
+    totalIPs: number;
+    errors: string[];
+  };
+  
   error?: string;
 }
 
@@ -273,6 +292,201 @@ function validateDomain(domain: string): boolean {
   return domainRegex.test(domain) && domain.length <= 253;
 }
 
+// SPF Flattening Functions
+async function performSPFFlattening(
+  domains: string[],
+  recursive: boolean,
+  maxDepth: number
+): Promise<{
+  resolvedDomains: Record<string, {
+    ips: string[];
+    nestedIncludes: string[];
+    errors: string[];
+  }>;
+  totalIPs: number;
+  errors: string[];
+}> {
+  const result = {
+    resolvedDomains: {} as Record<string, {
+      ips: string[];
+      nestedIncludes: string[];
+      errors: string[];
+    }>,
+    totalIPs: 0,
+    errors: []
+  };
+
+  const visited = new Set<string>();
+
+  for (const domain of domains) {
+    try {
+      const resolution = await resolveSPFDomain(domain, visited, recursive, maxDepth, 0);
+      result.resolvedDomains[domain] = resolution;
+      result.totalIPs += resolution.ips.length;
+    } catch (error) {
+      result.errors.push(`Failed to resolve ${domain}: ${error}`);
+      result.resolvedDomains[domain] = {
+        ips: [],
+        nestedIncludes: [],
+        errors: [`Resolution failed: ${error}`]
+      };
+    }
+  }
+
+  return result;
+}
+
+async function resolveSPFDomain(
+  domain: string,
+  visited: Set<string>,
+  recursive: boolean,
+  maxDepth: number,
+  currentDepth: number
+): Promise<{
+  ips: string[];
+  nestedIncludes: string[];
+  errors: string[];
+}> {
+  const resolution = {
+    ips: [] as string[],
+    nestedIncludes: [] as string[],
+    errors: [] as string[]
+  };
+
+  // Prevent infinite recursion
+  if (currentDepth >= maxDepth) {
+    resolution.errors.push(`Maximum recursion depth (${maxDepth}) reached for ${domain}`);
+    return resolution;
+  }
+
+  // Cycle detection
+  if (visited.has(domain)) {
+    resolution.errors.push(`Circular dependency detected: ${domain}`);
+    return resolution;
+  }
+
+  visited.add(domain);
+
+  try {
+    // Get TXT records for the domain
+    const txtRecords = await performDNSLookup(domain, 'TXT');
+    const spfRecord = txtRecords.find(record => record.startsWith('v=spf1'));
+    
+    if (!spfRecord) {
+      resolution.errors.push(`No SPF record found for ${domain}`);
+      return resolution;
+    }
+
+    // Parse SPF record mechanisms
+    const mechanisms = parseSPFMechanisms(spfRecord);
+
+    for (const mechanism of mechanisms) {
+      try {
+        switch (mechanism.type) {
+          case 'ip4':
+          case 'ip6':
+            resolution.ips.push(mechanism.value);
+            break;
+
+          case 'include':
+            resolution.nestedIncludes.push(mechanism.value);
+            if (recursive && currentDepth < maxDepth) {
+              const nestedResolution = await resolveSPFDomain(
+                mechanism.value, 
+                visited, 
+                recursive, 
+                maxDepth, 
+                currentDepth + 1
+              );
+              resolution.ips.push(...nestedResolution.ips);
+              resolution.nestedIncludes.push(...nestedResolution.nestedIncludes);
+              resolution.errors.push(...nestedResolution.errors);
+            }
+            break;
+
+          case 'a':
+            const aDomain = mechanism.value || domain;
+            const aRecords = await performDNSLookup(aDomain, 'A');
+            resolution.ips.push(...aRecords);
+            break;
+
+          case 'mx':
+            const mxDomain = mechanism.value || domain;
+            const mxRecords = await performDNSLookup(mxDomain, 'MX');
+            for (const mxRecord of mxRecords) {
+              const parts = mxRecord.split(' ');
+              const mxHostname = parts.length > 1 ? parts[1] : parts[0];
+              try {
+                const mxARecords = await performDNSLookup(mxHostname, 'A');
+                resolution.ips.push(...mxARecords);
+              } catch (error) {
+                resolution.errors.push(`Failed to resolve MX hostname ${mxHostname}: ${error}`);
+              }
+            }
+            break;
+
+          // Skip other mechanism types for flattening
+          default:
+            break;
+        }
+      } catch (error) {
+        resolution.errors.push(`Failed to resolve mechanism ${mechanism.type}:${mechanism.value}: ${error}`);
+      }
+    }
+
+  } catch (error) {
+    resolution.errors.push(`SPF resolution failed for ${domain}: ${error}`);
+  } finally {
+    visited.delete(domain);
+  }
+
+  return resolution;
+}
+
+function parseSPFMechanisms(spfRecord: string): Array<{
+  type: string;
+  value: string;
+  qualifier: string;
+}> {
+  const mechanisms: Array<{
+    type: string;
+    value: string;
+    qualifier: string;
+  }> = [];
+
+  const parts = spfRecord.split(' ');
+  
+  for (let i = 1; i < parts.length; i++) { // Skip v=spf1
+    const part = parts[i].trim();
+    if (!part) continue;
+
+    let qualifier = '+';
+    let mechanism = part;
+
+    // Extract qualifier
+    if (['+', '-', '~', '?'].includes(part[0])) {
+      qualifier = part[0];
+      mechanism = part.substring(1);
+    }
+
+    // Parse mechanism type and value
+    if (mechanism === 'all') {
+      mechanisms.push({ type: 'all', value: '', qualifier });
+    } else if (mechanism.includes(':')) {
+      const [type, value] = mechanism.split(':', 2);
+      mechanisms.push({ type, value, qualifier });
+    } else if (mechanism.includes('=')) {
+      // Skip modifiers for now
+      continue;
+    } else {
+      // Mechanisms without values (like 'a' or 'mx')
+      mechanisms.push({ type: mechanism, value: '', qualifier });
+    }
+  }
+
+  return mechanisms;
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -309,7 +523,52 @@ serve(async (req) => {
       );
     }
 
-    const { ip, domain, recordType }: DNSLookupRequest = await req.json();
+    const { ip, domain, recordType, spfFlatten }: DNSLookupRequest = await req.json();
+    
+    // Handle SPF flattening requests (new functionality)
+    if (spfFlatten) {
+      try {
+        const flatteningResult = await performSPFFlattening(
+          spfFlatten.domains,
+          spfFlatten.recursive,
+          spfFlatten.maxDepth || 3
+        );
+
+        const response: DNSLookupResponse = {
+          success: true,
+          spfFlattening: {
+            resolvedDomains: new Map(Object.entries(flatteningResult.resolvedDomains)),
+            totalIPs: flatteningResult.totalIPs,
+            errors: flatteningResult.errors
+          }
+        };
+
+        return new Response(
+          JSON.stringify(response, (key, value) => {
+            if (value instanceof Map) {
+              return Object.fromEntries(value);
+            }
+            return value;
+          }),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      } catch (error) {
+        console.error('SPF flattening error:', error);
+        
+        return new Response(
+          JSON.stringify({ 
+            success: false, 
+            error: `SPF flattening failed: ${error}` 
+          }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    }
     
     // Handle domain DNS lookups (new functionality for SPF analysis)
     if (domain && recordType) {

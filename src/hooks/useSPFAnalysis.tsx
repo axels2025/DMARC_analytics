@@ -8,6 +8,12 @@ import {
   analyzeSPFRecord 
 } from '@/utils/spfParser';
 import { SPFOptimizer } from '@/utils/spfOptimizer';
+import { 
+  flattenSPFIncludes, 
+  FlatteningResult, 
+  FlatteningOptions,
+  validateFlattenedRecord 
+} from '@/utils/spfFlattening';
 
 export interface SPFAnalysisHistoryEntry {
   id: string;
@@ -26,6 +32,44 @@ export interface SPFMonitoringSettings {
   alertThreshold: number;
   lastCheckedAt?: string;
   createdAt: string;
+}
+
+export interface SPFFlatteningOperation {
+  id: string;
+  domain: string;
+  operationType: 'flatten' | 'revert' | 'preview';
+  status: 'pending' | 'completed' | 'failed' | 'reverted';
+  originalRecord: string;
+  originalLookupCount: number;
+  targetIncludes: string[];
+  flatteningOptions: FlatteningOptions;
+  flattenedRecord?: string;
+  newLookupCount?: number;
+  resolvedIPs?: string[];
+  ipCount?: number;
+  warnings?: string[];
+  errors?: string[];
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface SPFFlatteningMetrics {
+  operationId: string;
+  lookupReduction: number;
+  sizeChange: number;
+  ipExpansion: number;
+  resolutionTimeMs: number;
+  consolidationRatio?: number;
+}
+
+export interface ESPClassification {
+  includeDomain: string;
+  espName: string;
+  espType: 'transactional' | 'marketing' | 'enterprise' | 'infrastructure' | 'unknown';
+  isStable: boolean;
+  requiresMonitoring: boolean;
+  consolidationSafe: boolean;
+  description?: string;
 }
 
 export const useSPFAnalysis = (domain?: string) => {
@@ -378,4 +422,322 @@ export const useSPFValidation = () => {
   }, []);
 
   return { validateRecord };
+};
+
+// Hook for SPF flattening operations
+export const useSPFFlattening = () => {
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const performFlattening = useCallback(async (
+    domain: string,
+    targetIncludes: string[],
+    options: FlatteningOptions
+  ): Promise<SPFFlatteningOperation | null> => {
+    if (!user || !domain || targetIncludes.length === 0) return null;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      console.log(`[useSPFFlattening] Starting flattening for ${domain}, includes:`, targetIncludes);
+
+      // Parse original SPF record
+      const originalRecord = await parseSPFRecord(domain);
+      if (!originalRecord.isValid) {
+        throw new Error(`Invalid SPF record: ${originalRecord.errors.join(', ')}`);
+      }
+
+      const startTime = Date.now();
+
+      // Perform the flattening
+      const result = await flattenSPFIncludes(domain, targetIncludes, options);
+      
+      const endTime = Date.now();
+      const resolutionTime = endTime - startTime;
+
+      // Store operation in database
+      const operationData = {
+        user_id: user.id,
+        domain,
+        operation_type: 'flatten' as const,
+        status: result.success ? 'completed' as const : 'failed' as const,
+        original_record: originalRecord.raw,
+        original_lookup_count: originalRecord.totalLookups,
+        target_includes: targetIncludes,
+        flattening_options: options,
+        flattened_record: result.flattenedRecord || null,
+        new_lookup_count: result.newLookups || null,
+        resolved_ips: result.resolvedIPs || null,
+        ip_count: result.ipCount || 0,
+        warnings: result.warnings || null,
+        errors: result.errors || null,
+        resolution_time_ms: resolutionTime,
+        total_dns_queries: result.resolvedIPs.length, // Approximate
+        completed_at: result.success ? new Date().toISOString() : null
+      };
+
+      const { data: operationResult, error: insertError } = await supabase
+        .from('spf_flattening_operations')
+        .insert(operationData)
+        .select('*')
+        .single();
+
+      if (insertError) {
+        console.warn('[useSPFFlattening] Failed to store operation:', insertError);
+        throw insertError;
+      }
+
+      // Convert database result to interface
+      const operation: SPFFlatteningOperation = {
+        id: operationResult.id,
+        domain: operationResult.domain,
+        operationType: operationResult.operation_type,
+        status: operationResult.status,
+        originalRecord: operationResult.original_record,
+        originalLookupCount: operationResult.original_lookup_count,
+        targetIncludes: operationResult.target_includes,
+        flatteningOptions: operationResult.flattening_options,
+        flattenedRecord: operationResult.flattened_record,
+        newLookupCount: operationResult.new_lookup_count,
+        resolvedIPs: operationResult.resolved_ips,
+        ipCount: operationResult.ip_count,
+        warnings: operationResult.warnings,
+        errors: operationResult.errors,
+        createdAt: operationResult.created_at,
+        completedAt: operationResult.completed_at
+      };
+
+      console.log(`[useSPFFlattening] Flattening completed for ${domain}:`, operation);
+      return operation;
+
+    } catch (err) {
+      console.error('[useSPFFlattening] Flattening failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to perform SPF flattening');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  const previewFlattening = useCallback(async (
+    domain: string,
+    targetIncludes: string[],
+    options: FlatteningOptions
+  ): Promise<FlatteningResult | null> => {
+    if (!domain || targetIncludes.length === 0) return null;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      console.log(`[useSPFFlattening] Previewing flattening for ${domain}`);
+      const result = await flattenSPFIncludes(domain, targetIncludes, options);
+      return result;
+    } catch (err) {
+      console.error('[useSPFFlattening] Preview failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to preview SPF flattening');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const validateFlattened = useCallback((flattenedRecord: string) => {
+    try {
+      return validateFlattenedRecord(flattenedRecord);
+    } catch (err) {
+      console.error('[useSPFFlattening] Validation failed:', err);
+      return {
+        isValid: false,
+        lookupCount: 0,
+        warnings: [],
+        errors: [err instanceof Error ? err.message : 'Validation failed'],
+        recordSize: flattenedRecord.length
+      };
+    }
+  }, []);
+
+  return {
+    performFlattening,
+    previewFlattening,
+    validateFlattened,
+    loading,
+    error
+  };
+};
+
+// Hook for SPF flattening history and operations
+export const useSPFFlatteningHistory = (domain?: string) => {
+  const { user } = useAuth();
+  const [operations, setOperations] = useState<SPFFlatteningOperation[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchOperations = useCallback(async () => {
+    if (!user) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      let query = supabase
+        .from('spf_flattening_operations')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (domain) {
+        query = query.eq('domain', domain);
+      }
+
+      const { data, error: fetchError } = await query;
+
+      if (fetchError) throw fetchError;
+
+      const formattedOperations: SPFFlatteningOperation[] = (data || []).map(item => ({
+        id: item.id,
+        domain: item.domain,
+        operationType: item.operation_type,
+        status: item.status,
+        originalRecord: item.original_record,
+        originalLookupCount: item.original_lookup_count,
+        targetIncludes: item.target_includes,
+        flatteningOptions: item.flattening_options,
+        flattenedRecord: item.flattened_record,
+        newLookupCount: item.new_lookup_count,
+        resolvedIPs: item.resolved_ips,
+        ipCount: item.ip_count,
+        warnings: item.warnings,
+        errors: item.errors,
+        createdAt: item.created_at,
+        completedAt: item.completed_at
+      }));
+
+      setOperations(formattedOperations);
+    } catch (err) {
+      console.error('[useSPFFlatteningHistory] Failed to fetch operations:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch flattening operations');
+      setOperations([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, domain]);
+
+  const revertOperation = useCallback(async (operationId: string): Promise<boolean> => {
+    if (!user) return false;
+
+    try {
+      // Mark the operation as reverted
+      const { error: updateError } = await supabase
+        .from('spf_flattening_operations')
+        .update({
+          status: 'reverted',
+          reverted_at: new Date().toISOString()
+        })
+        .eq('id', operationId)
+        .eq('user_id', user.id);
+
+      if (updateError) throw updateError;
+
+      // Refresh operations list
+      await fetchOperations();
+      return true;
+    } catch (err) {
+      console.error('[useSPFFlatteningHistory] Failed to revert operation:', err);
+      setError(err instanceof Error ? err.message : 'Failed to revert operation');
+      return false;
+    }
+  }, [user, fetchOperations]);
+
+  useEffect(() => {
+    fetchOperations();
+  }, [fetchOperations]);
+
+  return {
+    operations,
+    loading,
+    error,
+    revertOperation,
+    refreshOperations: fetchOperations
+  };
+};
+
+// Hook for ESP classifications
+export const useESPClassifications = () => {
+  const [classifications, setClassifications] = useState<ESPClassification[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchClassifications = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('spf_esp_classifications')
+        .select('*')
+        .order('esp_name');
+
+      if (fetchError) throw fetchError;
+
+      const formattedClassifications: ESPClassification[] = (data || []).map(item => ({
+        includeDomain: item.include_domain,
+        espName: item.esp_name,
+        espType: item.esp_type,
+        isStable: item.is_stable,
+        requiresMonitoring: item.requires_monitoring,
+        consolidationSafe: item.consolidation_safe,
+        description: item.description
+      }));
+
+      setClassifications(formattedClassifications);
+    } catch (err) {
+      console.error('[useESPClassifications] Failed to fetch classifications:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch ESP classifications');
+      setClassifications([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const getClassificationForInclude = useCallback((includeDomain: string): ESPClassification | null => {
+    return classifications.find(c => c.includeDomain === includeDomain) || null;
+  }, [classifications]);
+
+  const getRecommendationsForIncludes = useCallback((includeList: string[]) => {
+    const recommendations = includeList.map(include => {
+      const classification = getClassificationForInclude(include);
+      return {
+        include,
+        classification,
+        canFlatten: !classification || classification.consolidationSafe,
+        needsMonitoring: classification?.requiresMonitoring || false,
+        isStable: classification?.isStable || true,
+        espType: classification?.espType || 'unknown'
+      };
+    });
+
+    return {
+      recommendations,
+      safesToFlatten: recommendations.filter(r => r.canFlatten).map(r => r.include),
+      needMonitoring: recommendations.filter(r => r.needsMonitoring).map(r => r.include),
+      unstableESPs: recommendations.filter(r => !r.isStable).map(r => r.include)
+    };
+  }, [getClassificationForInclude]);
+
+  useEffect(() => {
+    fetchClassifications();
+  }, [fetchClassifications]);
+
+  return {
+    classifications,
+    loading,
+    error,
+    getClassificationForInclude,
+    getRecommendationsForIncludes,
+    refreshClassifications: fetchClassifications
+  };
 };

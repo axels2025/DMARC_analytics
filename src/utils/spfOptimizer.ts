@@ -1,5 +1,17 @@
 import { SPFRecord, SPFMechanism, OptimizationSuggestion, parseSPFRecordFromString } from './spfParser';
 
+export interface FlatteningResult {
+  success: boolean;
+  flattenedRecord: string;
+  originalLookups: number;
+  newLookups: number;
+  ipCount: number;
+  resolvedIPs: Map<string, string[]>;
+  warnings: string[];
+  implementationNotes: string[];
+  errors: string[];
+}
+
 export class SPFOptimizer {
   analyzeOptimizations(record: SPFRecord): OptimizationSuggestion[] {
     const suggestions: OptimizationSuggestion[] = [];
@@ -335,5 +347,360 @@ export class SPFOptimizer {
         errors: [`Failed to validate optimized record: ${error}`]
       };
     }
+  }
+
+  // ==== NEW FLATTENING METHODS ====
+
+  /**
+   * Actually performs SPF flattening by resolving includes to IP addresses
+   */
+  async flattenSPFRecord(
+    record: SPFRecord, 
+    selectedSuggestions: OptimizationSuggestion[]
+  ): Promise<FlatteningResult> {
+    const result: FlatteningResult = {
+      success: false,
+      flattenedRecord: '',
+      originalLookups: record.totalLookups,
+      newLookups: 0,
+      ipCount: 0,
+      resolvedIPs: new Map(),
+      warnings: [],
+      implementationNotes: [],
+      errors: []
+    };
+
+    try {
+      // Get includes to flatten from suggestions
+      const includesToFlatten = selectedSuggestions
+        .filter(s => s.type === 'flatten_include')
+        .map(s => s.mechanism);
+
+      if (includesToFlatten.length === 0) {
+        result.errors.push('No includes selected for flattening');
+        return result;
+      }
+
+      // Resolve each include to IP addresses
+      const resolvedIncludes = new Map<string, string[]>();
+      
+      for (const includeDomain of includesToFlatten) {
+        try {
+          const resolution = await this.resolveIncludeToIPs(includeDomain);
+          if (resolution.ipAddresses.length > 0) {
+            resolvedIncludes.set(includeDomain, resolution.ipAddresses);
+            result.resolvedIPs.set(includeDomain, resolution.ipAddresses);
+            
+            if (resolution.errors.length > 0) {
+              result.warnings.push(`Partial resolution for ${includeDomain}: ${resolution.errors.join(', ')}`);
+            }
+            
+            if (resolution.nestedIncludes && resolution.nestedIncludes.length > 0) {
+              result.implementationNotes.push(`${includeDomain} contains nested includes: ${resolution.nestedIncludes.join(', ')}`);
+            }
+          } else {
+            result.errors.push(`Failed to resolve any IPs for ${includeDomain}`);
+          }
+        } catch (error) {
+          result.errors.push(`Error resolving ${includeDomain}: ${error}`);
+        }
+      }
+
+      // If we have resolution errors for all includes, fail
+      if (resolvedIncludes.size === 0) {
+        result.errors.push('Failed to resolve any includes for flattening');
+        return result;
+      }
+
+      // Build the flattened record
+      result.flattenedRecord = this.buildFlattenedRecord(record, resolvedIncludes, selectedSuggestions);
+      
+      // Calculate new lookup count
+      const parsedFlattened = parseSPFRecordFromString(result.flattenedRecord);
+      result.newLookups = parsedFlattened.totalLookups;
+      
+      // Count total resolved IPs
+      result.ipCount = Array.from(result.resolvedIPs.values())
+        .reduce((total, ips) => total + ips.length, 0);
+
+      // Add implementation notes
+      result.implementationNotes.push(
+        `Flattened ${includesToFlatten.length} include(s), reduced lookups from ${result.originalLookups} to ${result.newLookups}`
+      );
+      result.implementationNotes.push(
+        `Monitor flattened IPs for changes. Common ESPs: monthly check recommended. Custom domains: weekly check recommended.`
+      );
+
+      // Add warnings for large IP counts
+      if (result.ipCount > 20) {
+        result.warnings.push(`High IP count (${result.ipCount}). Consider CIDR consolidation to reduce SPF record size.`);
+      }
+
+      // Add warnings for common ESPs
+      for (const includeDomain of includesToFlatten) {
+        if (this.isCommonESP(includeDomain)) {
+          result.warnings.push(`${includeDomain} is a major ESP - their IP ranges may change. Set up monitoring.`);
+        }
+      }
+
+      result.success = true;
+      return result;
+
+    } catch (error) {
+      result.errors.push(`Flattening failed: ${error}`);
+      return result;
+    }
+  }
+
+  /**
+   * Resolves an include mechanism to its IP addresses
+   */
+  private async resolveIncludeToIPs(includeDomain: string): Promise<{
+    ipAddresses: string[];
+    errors: string[];
+    nestedIncludes?: string[];
+  }> {
+    const result = {
+      ipAddresses: [] as string[],
+      errors: [] as string[],
+      nestedIncludes: [] as string[]
+    };
+
+    try {
+      // Make DNS request to resolve TXT record
+      const response = await fetch('/functions/v1/dns-lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain: includeDomain,
+          recordType: 'TXT'
+        })
+      });
+
+      if (!response.ok) {
+        result.errors.push(`DNS lookup failed: ${response.status}`);
+        return result;
+      }
+
+      const dnsResult = await response.json();
+      if (!dnsResult.success || !dnsResult.records) {
+        result.errors.push(`No TXT records found for ${includeDomain}`);
+        return result;
+      }
+
+      // Find SPF record
+      const spfRecord = dnsResult.records.find((record: string) => record.startsWith('v=spf1'));
+      if (!spfRecord) {
+        result.errors.push(`No SPF record found in TXT records for ${includeDomain}`);
+        return result;
+      }
+
+      // Parse the SPF record
+      const parsed = parseSPFRecordFromString(spfRecord);
+      if (!parsed.isValid) {
+        result.errors.push(`Invalid SPF record for ${includeDomain}: ${parsed.errors.join(', ')}`);
+        return result;
+      }
+
+      // Extract IP addresses and track nested includes
+      for (const mechanism of parsed.mechanisms) {
+        switch (mechanism.type) {
+          case 'ip4':
+          case 'ip6':
+            result.ipAddresses.push(mechanism.value);
+            break;
+          case 'include':
+            result.nestedIncludes.push(mechanism.value);
+            // Note: We don't recursively resolve to avoid complexity and infinite loops
+            break;
+          case 'a':
+          case 'mx':
+            try {
+              const resolvedIPs = await this.resolveMechanismToIPs(mechanism);
+              result.ipAddresses.push(...resolvedIPs);
+            } catch (error) {
+              result.errors.push(`Failed to resolve ${mechanism.type}:${mechanism.value}: ${error}`);
+            }
+            break;
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      result.errors.push(`Resolution failed: ${error}`);
+      return result;
+    }
+  }
+
+  /**
+   * Resolve a mechanism (a, mx) to IP addresses
+   */
+  private async resolveMechanismToIPs(mechanism: SPFMechanism): Promise<string[]> {
+    const ips: string[] = [];
+    const domain = mechanism.value || mechanism.subdomain;
+    
+    if (!domain) return ips;
+
+    try {
+      if (mechanism.type === 'a') {
+        const response = await fetch('/functions/v1/dns-lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            domain,
+            recordType: 'A'
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.records) {
+            ips.push(...result.records);
+          }
+        }
+      } else if (mechanism.type === 'mx') {
+        const response = await fetch('/functions/v1/dns-lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            domain,
+            recordType: 'MX'
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.records) {
+            // Resolve each MX record to A records
+            for (const mxRecord of result.records) {
+              const parts = mxRecord.split(' ');
+              const mxHostname = parts.length > 1 ? parts[1] : parts[0];
+              
+              const aResponse = await fetch('/functions/v1/dns-lookup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  domain: mxHostname,
+                  recordType: 'A'
+                })
+              });
+
+              if (aResponse.ok) {
+                const aResult = await aResponse.json();
+                if (aResult.success && aResult.records) {
+                  ips.push(...aResult.records);
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to resolve ${mechanism.type}:${domain}:`, error);
+    }
+
+    return ips;
+  }
+
+  /**
+   * Consolidates multiple IP addresses into efficient CIDR blocks
+   */
+  private consolidateIPRanges(ipAddresses: string[]): {
+    consolidatedRanges: string[];
+    reductionCount: number;
+  } {
+    const originalCount = ipAddresses.length;
+    
+    // Basic CIDR consolidation - group by /24 subnets
+    const subnets = new Map<string, string[]>();
+    const standaloneIPs: string[] = [];
+
+    for (const ip of ipAddresses) {
+      if (!ip.includes('/')) { // Individual IP address
+        const parts = ip.split('.');
+        if (parts.length === 4) {
+          const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
+          if (!subnets.has(subnet)) {
+            subnets.set(subnet, []);
+          }
+          subnets.get(subnet)!.push(ip);
+        } else {
+          standaloneIPs.push(ip); // IPv6 or malformed
+        }
+      } else {
+        standaloneIPs.push(ip); // Already a CIDR range
+      }
+    }
+
+    const consolidated: string[] = [];
+    
+    // Convert subnets with 8+ IPs to /24 CIDR
+    for (const [subnet, ips] of subnets.entries()) {
+      if (ips.length >= 8) {
+        consolidated.push(`${subnet}.0/24`);
+      } else {
+        consolidated.push(...ips);
+      }
+    }
+
+    consolidated.push(...standaloneIPs);
+
+    return {
+      consolidatedRanges: consolidated,
+      reductionCount: originalCount - consolidated.length
+    };
+  }
+
+  /**
+   * Generates the actual flattened SPF record string
+   */
+  private buildFlattenedRecord(
+    originalRecord: SPFRecord,
+    resolvedIncludes: Map<string, string[]>,
+    suggestions: OptimizationSuggestion[]
+  ): string {
+    const mechanisms: string[] = [];
+    const modifiers: string[] = [];
+
+    // Start with version
+    const recordParts = [originalRecord.version];
+
+    // Process existing mechanisms
+    for (const mechanism of originalRecord.mechanisms) {
+      if (mechanism.type === 'include' && resolvedIncludes.has(mechanism.value)) {
+        // Replace include with resolved IPs
+        const ips = resolvedIncludes.get(mechanism.value)!;
+        const consolidated = this.consolidateIPRanges(ips);
+        
+        for (const ipOrRange of consolidated.consolidatedRanges) {
+          const qualifier = mechanism.qualifier === '+' ? '' : mechanism.qualifier;
+          if (ipOrRange.includes(':')) {
+            mechanisms.push(`${qualifier}ip6:${ipOrRange}`);
+          } else {
+            mechanisms.push(`${qualifier}ip4:${ipOrRange}`);
+          }
+        }
+      } else if (mechanism.type === 'ptr' && 
+                 suggestions.some(s => s.type === 'remove_ptr' && s.mechanism.includes('ptr'))) {
+        // Skip PTR mechanisms if suggested for removal
+        continue;
+      } else {
+        // Keep other mechanisms as-is
+        const qualifier = mechanism.qualifier === '+' ? '' : mechanism.qualifier;
+        const value = mechanism.value ? `:${mechanism.value}` : '';
+        mechanisms.push(`${qualifier}${mechanism.type}${value}`);
+      }
+    }
+
+    // Add modifiers
+    for (const modifier of originalRecord.modifiers) {
+      modifiers.push(`${modifier.type}=${modifier.value}`);
+    }
+
+    // Combine all parts
+    const allParts = [originalRecord.version, ...mechanisms, ...modifiers];
+    
+    return allParts.join(' ');
   }
 }
