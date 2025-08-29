@@ -2,13 +2,17 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { corsHeaders } from '../_shared/cors.ts'
 
 interface DNSLookupRequest {
-  ip: string;
+  ip?: string;
+  domain?: string;
+  recordType?: 'TXT' | 'A' | 'MX' | 'PTR';
 }
 
 interface DNSLookupResponse {
   success: boolean;
   hostname?: string;
   provider?: string;
+  records?: string[];
+  recordType?: string;
   error?: string;
 }
 
@@ -192,6 +196,83 @@ function expandIPv6(ip: string): string {
   return ip.split(':').map(part => part.padStart(4, '0')).join(':');
 }
 
+// DNS lookup functions for SPF analysis
+async function performDNSLookup(domain: string, recordType: 'TXT' | 'A' | 'MX'): Promise<string[]> {
+  try {
+    let dohUrl: string;
+    
+    switch (recordType) {
+      case 'TXT':
+        dohUrl = `https://cloudflare-dns.com/dns-query?name=${domain}&type=TXT`;
+        break;
+      case 'A':
+        dohUrl = `https://cloudflare-dns.com/dns-query?name=${domain}&type=A`;
+        break;
+      case 'MX':
+        dohUrl = `https://cloudflare-dns.com/dns-query?name=${domain}&type=MX`;
+        break;
+      default:
+        throw new Error(`Unsupported record type: ${recordType}`);
+    }
+    
+    console.log(`${recordType} DNS query for ${domain}: ${dohUrl}`);
+    
+    const response = await fetch(dohUrl, {
+      headers: {
+        'Accept': 'application/dns-json',
+      },
+    });
+    
+    if (!response.ok) {
+      console.warn(`DNS query failed: ${response.status} for ${domain} (${recordType})`);
+      throw new Error(`DNS query failed: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log(`DNS response for ${domain} (${recordType}):`, data);
+    
+    if (data.Answer && data.Answer.length > 0) {
+      const records = data.Answer.map((answer: any) => {
+        let record = answer.data;
+        
+        // Clean up record based on type
+        switch (recordType) {
+          case 'TXT':
+            // Remove quotes from TXT records
+            record = record.replace(/^"(.*)"$/, '$1');
+            break;
+          case 'A':
+            // A records should be IP addresses already
+            break;
+          case 'MX':
+            // MX records are already in "priority hostname" format
+            break;
+        }
+        
+        return record;
+      });
+      
+      console.log(`Resolved ${domain} (${recordType}) to:`, records);
+      return records;
+    }
+    
+    console.log(`No ${recordType} records found for ${domain}`);
+    return [];
+  } catch (error) {
+    console.warn(`${recordType} DNS lookup failed for ${domain}:`, error);
+    throw error;
+  }
+}
+
+// Domain validation for SPF lookups
+function validateDomain(domain: string): boolean {
+  if (!domain) return false;
+  
+  // Basic domain validation
+  const domainRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
+  return domainRegex.test(domain) && domain.length <= 253;
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -228,11 +309,66 @@ serve(async (req) => {
       );
     }
 
-    const { ip }: DNSLookupRequest = await req.json();
+    const { ip, domain, recordType }: DNSLookupRequest = await req.json();
     
+    // Handle domain DNS lookups (new functionality for SPF analysis)
+    if (domain && recordType) {
+      if (!validateDomain(domain)) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Invalid domain format' }),
+          { 
+            status: 400, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      if (!['TXT', 'A', 'MX'].includes(recordType)) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Unsupported record type. Supported: TXT, A, MX' }),
+          { 
+            status: 400, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      try {
+        const records = await performDNSLookup(domain, recordType as 'TXT' | 'A' | 'MX');
+        
+        const response: DNSLookupResponse = {
+          success: true,
+          records,
+          recordType,
+        };
+
+        return new Response(
+          JSON.stringify(response),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      } catch (error) {
+        console.error(`Domain DNS lookup error for ${domain} (${recordType}):`, error);
+        
+        return new Response(
+          JSON.stringify({ 
+            success: false, 
+            error: `DNS lookup failed for ${domain}`,
+            recordType
+          }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    }
+    
+    // Handle IP reverse lookups (existing functionality)
     if (!ip) {
       return new Response(
-        JSON.stringify({ success: false, error: 'IP address is required' }),
+        JSON.stringify({ success: false, error: 'Either IP address or domain with recordType is required' }),
         { 
           status: 400, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }

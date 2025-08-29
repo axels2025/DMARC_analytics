@@ -12,7 +12,8 @@ import {
   TrendingUp,
   RefreshCw,
   Download,
-  Settings
+  Settings,
+  Upload
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
@@ -22,6 +23,7 @@ import ForensicReportsList from '@/components/forensics/ForensicReportsList';
 import ForensicDetailModal from '@/components/forensics/ForensicDetailModal';
 import ThreatSourceAnalysis from '@/components/forensics/ThreatSourceAnalysis';
 import FailurePatternAnalysis from '@/components/forensics/FailurePatternAnalysis';
+import ForensicUpload from '@/components/forensics/ForensicUpload';
 import MetricCard from '@/components/MetricCard';
 
 const ForensicDashboard = () => {
@@ -97,17 +99,47 @@ const ForensicDashboard = () => {
   };
 
   if (error) {
+    const isMissingTable = error.includes('table not found') || error.includes('does not exist');
+    
     return (
       <div className="container mx-auto p-6">
         <Card>
           <CardContent className="text-center py-8">
             <AlertTriangle className="h-12 w-12 mx-auto text-red-500 mb-4" />
-            <h3 className="text-lg font-medium text-red-700 mb-2">Error Loading Forensic Data</h3>
+            <h3 className="text-lg font-medium text-red-700 mb-2">
+              {isMissingTable ? 'Forensic Reports Not Set Up' : 'Error Loading Forensic Data'}
+            </h3>
             <p className="text-red-600 mb-4">{error}</p>
-            <Button onClick={refetch}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Retry
-            </Button>
+            
+            {isMissingTable && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4 text-left">
+                <h4 className="font-medium text-yellow-800 mb-2">Setup Required</h4>
+                <p className="text-yellow-700 text-sm mb-3">
+                  To enable forensic reporting, you need to apply the database migrations:
+                </p>
+                <div className="text-xs text-yellow-700 space-y-1 font-mono bg-yellow-100 p-2 rounded">
+                  <div>1. Run: <code>supabase db push</code></div>
+                  <div>2. Or apply migrations manually in Supabase Dashboard</div>
+                  <div>3. Required migrations:</div>
+                  <div className="ml-4">• 20250828211008_add_forensic_reports_support.sql</div>
+                  <div className="ml-4">• 20250828224725_add_privacy_controls.sql</div>
+                  <div className="ml-4">• 20250828225000_add_lifecycle_functions.sql</div>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex justify-center gap-2">
+              <Button onClick={refetch}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Retry
+              </Button>
+              {isMissingTable && (
+                <Button variant="outline" onClick={() => window.open('https://supabase.com/docs/guides/cli', '_blank')}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Setup Guide
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -188,22 +220,26 @@ const ForensicDashboard = () => {
       </div>
 
       <Tabs defaultValue="reports" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="reports" className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4" />
-            Forensic Reports
+            Reports
+          </TabsTrigger>
+          <TabsTrigger value="upload" className="flex items-center gap-2">
+            <Upload className="h-4 w-4" />
+            Upload
           </TabsTrigger>
           <TabsTrigger value="threat-sources" className="flex items-center gap-2">
             <Globe className="h-4 w-4" />
-            Threat Sources
+            Threats
           </TabsTrigger>
           <TabsTrigger value="patterns" className="flex items-center gap-2">
             <TrendingUp className="h-4 w-4" />
-            Failure Patterns
+            Patterns
           </TabsTrigger>
           <TabsTrigger value="timeline" className="flex items-center gap-2">
             <Clock className="h-4 w-4" />
-            Activity Timeline
+            Timeline
           </TabsTrigger>
         </TabsList>
 
@@ -228,12 +264,32 @@ const ForensicDashboard = () => {
                 onLoadMore={loadMore}
                 onRecordClick={handleRecordClick}
                 onRefresh={refetch}
-                privacySettings={privacySettings}
-                maskingOptions={maskingOptions}
-                onPrivacySettingsChange={handlePrivacySettingsChange}
               />
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="upload" className="space-y-6">
+          <ForensicUpload onUploadSuccess={() => {
+            refetch();
+            // Refetch available domains
+            const fetchDomains = async () => {
+              if (!user) return;
+              try {
+                const { data } = await supabase
+                  .from('dmarc_forensic_reports')
+                  .select('domain')
+                  .eq('user_id', user.id);
+                if (data) {
+                  const uniqueDomains = Array.from(new Set(data.map(r => r.domain)));
+                  setAvailableDomains(uniqueDomains);
+                }
+              } catch (error) {
+                console.error('Failed to fetch domains:', error);
+              }
+            };
+            fetchDomains();
+          }} />
         </TabsContent>
 
         <TabsContent value="threat-sources" className="space-y-6">
@@ -272,16 +328,13 @@ const ForensicDashboard = () => {
       </Tabs>
 
       {/* Detail Modal */}
-      <ForensicDetailModalPrivacy
+      <ForensicDetailModal
         record={selectedRecord}
         isOpen={showDetailModal}
         onClose={() => {
           setShowDetailModal(false);
           setSelectedRecord(null);
         }}
-        privacySettings={privacySettings}
-        maskingOptions={maskingOptions}
-        onPrivacySettingsChange={handlePrivacySettingsChange}
       />
     </div>
   );

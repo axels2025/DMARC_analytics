@@ -134,7 +134,17 @@ export const useForensicData = (domain?: string, filters: Partial<ForensicFilter
 
       if (fetchError) {
         console.error('Error fetching forensic reports:', fetchError);
-        setState(prev => ({ ...prev, loading: false, error: fetchError.message }));
+        
+        // Check if it's a missing table error
+        if (fetchError.code === '42P01' || fetchError.message.includes('does not exist')) {
+          setState(prev => ({ 
+            ...prev, 
+            loading: false, 
+            error: 'Forensic reports table not found. Please apply database migrations to enable forensic reporting.' 
+          }));
+        } else {
+          setState(prev => ({ ...prev, loading: false, error: fetchError.message }));
+        }
         return;
       }
 
@@ -218,6 +228,21 @@ export const useForensicData = (domain?: string, filters: Partial<ForensicFilter
 
       if (metricsError) {
         console.error('Error fetching metrics:', metricsError);
+        
+        // Handle missing table gracefully for metrics
+        if (metricsError.code === '42P01' || metricsError.message.includes('does not exist')) {
+          // Provide default metrics when table doesn't exist
+          const defaultMetrics: ForensicMetrics = {
+            totalFailedEmails: 0,
+            uniqueSources: 0,
+            commonFailureType: 'No Data',
+            recentActivityCount: 0,
+            topThreatSources: [],
+            failureTypes: [],
+            timelineCounts: []
+          };
+          setState(prev => ({ ...prev, metrics: defaultMetrics }));
+        }
         return;
       }
 

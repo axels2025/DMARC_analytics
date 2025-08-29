@@ -15,7 +15,8 @@ import {
   Upload as UploadIcon,
   Eye,
   Loader,
-  Download
+  Download,
+  AlertTriangle
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import OverviewCharts from "@/components/charts/OverviewCharts";
@@ -31,6 +32,7 @@ import DkimSelectorExplorer from "@/components/analytics/DkimSelectorExplorer";
 import SpfDomainExplorer from "@/components/analytics/SpfDomainExplorer";
 import AlignmentDashboard from "@/components/analytics/AlignmentDashboard";
 import { useDmarcData } from "@/hooks/useDmarcData";
+import { useSPFHealthMetrics } from "@/hooks/useSPFAnalysis";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -42,6 +44,7 @@ const Dashboard = () => {
   const [selectedDomain, setSelectedDomain] = useState<string>("all");
   const [availableDomains, setAvailableDomains] = useState<Array<{domain: string, count: number}>>([]);
   const { metrics, recentReports, loading, error, refetch } = useDmarcData(selectedDomain === "all" ? undefined : selectedDomain);
+  const { metrics: spfMetrics } = useSPFHealthMetrics();
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
@@ -184,35 +187,94 @@ const Dashboard = () => {
 
       {/* Metrics Overview */}
       {metrics && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <MetricCard
-            title="Total Reports"
-            value={metrics.totalReports.toLocaleString()}
-            icon={Shield}
-            color="blue"
-            trend={metrics.totalReports > 0 ? "Active" : "No reports yet"}
-          />
-          <MetricCard
-            title="Emails Analyzed"
-            value={metrics.totalEmails.toLocaleString()}
-            icon={Mail}
-            color="green"
-            trend={metrics.totalEmails > 0 ? "Real data" : "Upload reports to see data"}
-          />
-          <MetricCard
-            title="Success Rate"
-            value={`${metrics.successRate}%`}
-            icon={CheckCircle}
-            color="emerald"
-            trend={metrics.totalEmails > 0 ? "Authentication rate" : "No data"}
-          />
-          <MetricCard
-            title="Unique Source IPs"
-            value={metrics.uniqueIPs.toLocaleString()}
-            icon={Globe}
-            color="purple"
-            trend={`${metrics.activeDomains} domains`}
-          />
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <MetricCard
+              title="Total Reports"
+              value={metrics.totalReports.toLocaleString()}
+              icon={Shield}
+              color="blue"
+              trend={metrics.totalReports > 0 ? "Active" : "No reports yet"}
+            />
+            <MetricCard
+              title="Emails Analyzed"
+              value={metrics.totalEmails.toLocaleString()}
+              icon={Mail}
+              color="green"
+              trend={metrics.totalEmails > 0 ? "Real data" : "Upload reports to see data"}
+            />
+            <MetricCard
+              title="Success Rate"
+              value={`${metrics.successRate}%`}
+              icon={CheckCircle}
+              color="emerald"
+              trend={metrics.totalEmails > 0 ? "Authentication rate" : "No data"}
+            />
+            <MetricCard
+              title="Unique Source IPs"
+              value={metrics.uniqueIPs.toLocaleString()}
+              icon={Globe}
+              color="purple"
+              trend={`${metrics.activeDomains} domains`}
+            />
+          </div>
+
+          {/* SPF Health Metrics */}
+          {spfMetrics.totalDomains > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5" />
+                SPF Record Health
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <MetricCard
+                  title="SPF Analyzed"
+                  value={spfMetrics.totalDomains.toString()}
+                  icon={Shield}
+                  color="blue"
+                  trend="domains monitored"
+                />
+                <MetricCard
+                  title="Healthy Records"
+                  value={spfMetrics.healthyDomains.toString()}
+                  icon={CheckCircle}
+                  color="green"
+                  trend={`${Math.round((spfMetrics.healthyDomains / spfMetrics.totalDomains) * 100)}% compliant`}
+                />
+                <MetricCard
+                  title="At Risk"
+                  value={spfMetrics.warningDomains.toString()}
+                  icon={AlertTriangle}
+                  color="yellow"
+                  trend="need attention"
+                />
+                <MetricCard
+                  title="Critical Issues"
+                  value={spfMetrics.criticalDomains.toString()}
+                  icon={XCircle}
+                  color="red"
+                  trend={spfMetrics.criticalDomains > 0 ? "immediate action needed" : "no critical issues"}
+                />
+              </div>
+              {spfMetrics.averageLookups > 0 && (
+                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <strong>Average DNS Lookups:</strong> {spfMetrics.averageLookups}/10 
+                    {spfMetrics.averageLookups >= 8 && (
+                      <span className="ml-2 text-red-600 font-semibold">
+                        ⚠️ Approaching limit
+                      </span>
+                    )}
+                  </p>
+                  {spfMetrics.lastAnalyzed && (
+                    <p className="text-xs text-blue-600 mt-1">
+                      Last analyzed: {new Date(spfMetrics.lastAnalyzed).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
