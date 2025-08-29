@@ -12,6 +12,13 @@ interface DNSLookupRequest {
     recursive: boolean;
     maxDepth: number;
   };
+  
+  // New fields for SPF monitoring
+  spfMonitor?: {
+    domain: string;
+    includes: string[];
+    compareToBaseline: boolean;
+  };
 }
 
 interface DNSLookupResponse {
@@ -29,6 +36,21 @@ interface DNSLookupResponse {
       errors: string[];
     }>;
     totalIPs: number;
+    errors: string[];
+  };
+  
+  // SPF monitoring response fields
+  spfMonitoring?: {
+    domain: string;
+    resolvedIPs: string[];
+    includeDomains: {
+      [domain: string]: {
+        ips: string[];
+        errors: string[];
+        hasChanged?: boolean;
+        previousIPs?: string[];
+      };
+    };
     errors: string[];
   };
   
@@ -487,6 +509,83 @@ function parseSPFMechanisms(spfRecord: string): Array<{
   return mechanisms;
 }
 
+// SPF Monitoring functionality
+async function performSPFMonitoring(
+  domain: string, 
+  includes: string[], 
+  compareToBaseline: boolean
+): Promise<{
+  domain: string;
+  resolvedIPs: string[];
+  includeDomains: {
+    [domain: string]: {
+      ips: string[];
+      errors: string[];
+      hasChanged?: boolean;
+      previousIPs?: string[];
+    };
+  };
+  errors: string[];
+}> {
+  const result = {
+    domain,
+    resolvedIPs: [] as string[],
+    includeDomains: {} as { [domain: string]: { ips: string[]; errors: string[]; hasChanged?: boolean; previousIPs?: string[] } },
+    errors: [] as string[]
+  };
+
+  console.log(`[DNS Lookup] Performing SPF monitoring for domain: ${domain}, includes: ${includes.join(', ')}`);
+
+  try {
+    // Resolve each include domain to IPs
+    for (const includeDomain of includes) {
+      try {
+        console.log(`[DNS Lookup] Resolving include: ${includeDomain}`);
+        
+        // Use existing SPF resolution logic
+        const resolution = await resolveSPFInclude(includeDomain, new Set());
+        
+        result.includeDomains[includeDomain] = {
+          ips: resolution.ips,
+          errors: resolution.errors
+        };
+        
+        result.resolvedIPs.push(...resolution.ips);
+
+        // If baseline comparison is requested, we would need to access the database
+        // For now, this is handled by the monitoring system that calls this function
+        if (compareToBaseline) {
+          // This would typically be handled by the calling monitoring system
+          // which has access to the baseline data from the database
+          console.log(`[DNS Lookup] Baseline comparison requested for ${includeDomain} (handled by caller)`);
+        }
+
+      } catch (includeError) {
+        const errorMsg = `Failed to resolve ${includeDomain}: ${includeError}`;
+        console.error('[DNS Lookup]', errorMsg);
+        result.errors.push(errorMsg);
+        
+        result.includeDomains[includeDomain] = {
+          ips: [],
+          errors: [errorMsg]
+        };
+      }
+    }
+
+    // Remove duplicate IPs
+    result.resolvedIPs = [...new Set(result.resolvedIPs)];
+
+    console.log(`[DNS Lookup] SPF monitoring completed for ${domain}. Total IPs: ${result.resolvedIPs.length}`);
+    
+  } catch (error) {
+    const errorMsg = `SPF monitoring failed for ${domain}: ${error}`;
+    console.error('[DNS Lookup]', errorMsg);
+    result.errors.push(errorMsg);
+  }
+
+  return result;
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -523,7 +622,43 @@ serve(async (req) => {
       );
     }
 
-    const { ip, domain, recordType, spfFlatten }: DNSLookupRequest = await req.json();
+    const { ip, domain, recordType, spfFlatten, spfMonitor }: DNSLookupRequest = await req.json();
+    
+    // Handle SPF monitoring requests (new functionality)
+    if (spfMonitor) {
+      try {
+        const monitoringResult = await performSPFMonitoring(
+          spfMonitor.domain,
+          spfMonitor.includes,
+          spfMonitor.compareToBaseline
+        );
+
+        const response: DNSLookupResponse = {
+          success: true,
+          spfMonitoring: monitoringResult
+        };
+
+        return new Response(
+          JSON.stringify(response),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      } catch (error) {
+        console.error('SPF monitoring error:', error);
+        
+        return new Response(
+          JSON.stringify({ 
+            success: false, 
+            error: `SPF monitoring failed: ${error}` 
+          }),
+          { 
+            status: 500, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          }
+        );
+      }
+    }
     
     // Handle SPF flattening requests (new functionality)
     if (spfFlatten) {

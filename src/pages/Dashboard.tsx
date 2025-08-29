@@ -33,6 +33,7 @@ import SpfDomainExplorer from "@/components/analytics/SpfDomainExplorer";
 import AlignmentDashboard from "@/components/analytics/AlignmentDashboard";
 import SPFFlattener from "@/components/spf/SPFFlattener";
 import SPFFlatteningHistory from "@/components/spf/SPFFlatteningHistory";
+import SPFMonitoringDashboard from "@/components/spf/SPFMonitoringDashboard";
 import { useDmarcData } from "@/hooks/useDmarcData";
 import { useSPFHealthMetrics } from "@/hooks/useSPFAnalysis";
 import { exportAsCSV, exportAsPDF } from "@/utils/exportService";
@@ -276,22 +277,38 @@ const Dashboard = () => {
                         </p>
                       )}
                     </div>
-                    {(spfMetrics.criticalDomains > 0 || spfMetrics.averageLookups >= 8) && (
+                    <div className="flex gap-2">
+                      {(spfMetrics.criticalDomains > 0 || spfMetrics.averageLookups >= 8) && (
+                        <Link 
+                          to="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            // Switch to SPF Flattening tab
+                            const spfTab = document.querySelector('[value="spf-flattening"]') as HTMLElement;
+                            spfTab?.click();
+                          }}
+                        >
+                          <Button size="sm" className="bg-orange-600 hover:bg-orange-700">
+                            <TrendingUp className="w-3 h-3 mr-1" />
+                            Optimize SPF
+                          </Button>
+                        </Link>
+                      )}
                       <Link 
                         to="#"
                         onClick={(e) => {
                           e.preventDefault();
-                          // Switch to SPF Flattening tab
-                          const spfTab = document.querySelector('[value="spf-flattening"]') as HTMLElement;
-                          spfTab?.click();
+                          // Switch to SPF Monitoring tab
+                          const monitoringTab = document.querySelector('[value="spf-monitoring"]') as HTMLElement;
+                          monitoringTab?.click();
                         }}
                       >
-                        <Button size="sm" className="bg-orange-600 hover:bg-orange-700">
-                          <TrendingUp className="w-3 h-3 mr-1" />
-                          Optimize SPF
+                        <Button size="sm" variant="outline" className="border-teal-600 text-teal-600 hover:bg-teal-50">
+                          <Shield className="w-3 h-3 mr-1" />
+                          Monitor SPF
                         </Button>
                       </Link>
-                    )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -353,6 +370,12 @@ const Dashboard = () => {
               className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-orange-600 data-[state=active]:border data-[state=active]:border-orange-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
             >
               SPF Flattening
+            </TabsTrigger>
+            <TabsTrigger 
+              value="spf-monitoring" 
+              className="whitespace-nowrap px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 hover:bg-white/80 hover:shadow-md hover:scale-105 data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-teal-600 data-[state=active]:border data-[state=active]:border-teal-200 flex-shrink-0 relative overflow-hidden before:absolute before:inset-0 before:bg-gradient-to-r before:from-transparent before:via-white/20 before:to-transparent before:translate-x-[-100%] before:transition-transform before:duration-700 hover:before:translate-x-[100%]"
+            >
+              SPF Monitoring
             </TabsTrigger>
             
             {/* Divider */}
@@ -447,6 +470,10 @@ const Dashboard = () => {
             <SPFFlattener selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
             <SPFFlatteningHistory selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
           </div>
+        </TabsContent>
+
+        <TabsContent value="spf-monitoring" className="space-y-6">
+          <SPFMonitoringDashboard selectedDomain={selectedDomain === "all" ? undefined : selectedDomain} />
         </TabsContent>
 
         <TabsContent value="ip-intelligence" className="space-y-6">
