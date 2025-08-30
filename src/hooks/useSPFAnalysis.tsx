@@ -203,8 +203,17 @@ export const useSPFHistory = (domain?: string) => {
       setHistory(formattedHistory);
     } catch (err) {
       console.error('[useSPFHistory] Failed to fetch history:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch SPF analysis history');
-      setHistory([]);
+      
+      // Check if error is due to missing table (migrations not applied)
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes('does not exist') || errorMessage.includes('42P01')) {
+        // Table doesn't exist - provide empty history instead of error
+        setHistory([]);
+        setError(null); // Don't show error to user
+      } else {
+        setError('Failed to fetch SPF analysis history');
+        setHistory([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -381,7 +390,23 @@ export const useSPFHealthMetrics = () => {
       });
     } catch (err) {
       console.error('[useSPFHealthMetrics] Failed to fetch metrics:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch SPF health metrics');
+      
+      // Check if error is due to missing table (migrations not applied)
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes('does not exist') || errorMessage.includes('42P01')) {
+        // Table doesn't exist - provide empty metrics instead of error
+        setMetrics({
+          totalDomains: 0,
+          healthyDomains: 0,
+          warningDomains: 0,
+          criticalDomains: 0,
+          averageLookups: 0,
+          lastAnalyzed: null
+        });
+        setError(null); // Don't show error to user
+      } else {
+        setError('Failed to fetch SPF health metrics');
+      }
     } finally {
       setLoading(false);
     }

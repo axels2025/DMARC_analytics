@@ -25,9 +25,10 @@ import {
 import { SPFRecord, SPFAnalysis, OptimizationSuggestion } from '@/utils/spfParser';
 import { SPFOptimizer, FlatteningResult } from '@/utils/spfOptimizer';
 import { FlatteningOptions, validateFlattenedRecord } from '@/utils/spfFlattening';
+import { useSPFAnalysis } from '@/hooks/useSPFAnalysis';
 
 interface SPFFlattenerProps {
-  analysis: SPFAnalysis;
+  selectedDomain?: string;
   onSave?: (flattenedRecord: string, metadata: any) => void;
 }
 
@@ -39,7 +40,8 @@ interface FlatteningSelection {
   estimatedIPs: number;
 }
 
-const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
+const SPFFlattener: React.FC<SPFFlattenerProps> = ({ selectedDomain, onSave }) => {
+  const { analysis, loading: analysisLoading, error: analysisError, analyzeRecord } = useSPFAnalysis(selectedDomain);
   const [selections, setSelections] = useState<FlatteningSelection[]>([]);
   const [flatteningOptions, setFlatteningOptions] = useState<FlatteningOptions>({
     includeSubdomains: false,
@@ -57,6 +59,11 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
 
   // Initialize selections from analysis
   useEffect(() => {
+    if (!analysis?.optimizationSuggestions) {
+      setSelections([]);
+      return;
+    }
+
     const flatteningSuggestions = analysis.optimizationSuggestions.filter(
       s => s.type === 'flatten_include'
     );
@@ -109,7 +116,7 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
 
   const calculateLookupReduction = (): { current: number; estimated: number } => {
     const selectedDomains = selections.filter(s => s.selected);
-    const current = analysis.record.totalLookups;
+    const current = analysis?.record?.totalLookups || 0;
     const reduction = selectedDomains.length; // Each include = 1 lookup reduction
     return {
       current,
@@ -122,6 +129,10 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
     setError(null);
 
     try {
+      if (!analysis?.optimizationSuggestions || !analysis?.record) {
+        throw new Error('Analysis data not available');
+      }
+
       const selectedSuggestions = analysis.optimizationSuggestions.filter(
         s => s.type === 'flatten_include' && 
         selections.some(sel => sel.domain === s.mechanism && sel.selected)
@@ -164,6 +175,76 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
   const selectedCount = selections.filter(s => s.selected).length;
   const totalEstimatedIPs = selections.filter(s => s.selected)
     .reduce((total, s) => total + s.estimatedIPs, 0);
+
+  // Handle loading and error states
+  if (analysisLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Zap className="w-5 h-5" />
+              SPF Record Flattening
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Replace include mechanisms with direct IP addresses to reduce DNS lookups
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-center py-12">
+          <RefreshCw className="w-8 h-8 animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (analysisError) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Zap className="w-5 h-5" />
+              SPF Record Flattening
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Replace include mechanisms with direct IP addresses to reduce DNS lookups
+            </p>
+          </div>
+        </div>
+        <Alert>
+          <XCircle className="h-4 w-4" />
+          <AlertDescription>
+            Error loading SPF analysis: {analysisError}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!analysis?.record) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Zap className="w-5 h-5" />
+              SPF Record Flattening
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Replace include mechanisms with direct IP addresses to reduce DNS lookups
+            </p>
+          </div>
+        </div>
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            No SPF record found for the selected domain. Please ensure a valid domain is selected.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -365,16 +446,16 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ analysis, onSave }) => {
                   <div>
                     <Label className="text-sm font-semibold">Current SPF Record:</Label>
                     <div className="mt-2 p-3 bg-gray-100 rounded border font-mono text-sm break-all">
-                      {analysis.record.raw}
+                      {analysis.record?.raw}
                     </div>
                     <div className="mt-2 flex items-center gap-4 text-sm">
                       <span className="flex items-center gap-1">
                         <Target className="w-4 h-4" />
-                        {analysis.record.totalLookups} DNS lookups
+                        {analysis.record?.totalLookups || 0} DNS lookups
                       </span>
                       <span className="flex items-center gap-1">
                         <Network className="w-4 h-4" />
-                        {analysis.record.mechanisms.filter(m => m.type === 'include').length} includes
+                        {analysis.record?.mechanisms?.filter(m => m.type === 'include').length || 0} includes
                       </span>
                     </div>
                   </div>
