@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useSPFAnalysis, useSPFHistory } from '@/hooks/useSPFAnalysis';
 import { SPFAnalysis, OptimizationSuggestion } from '@/utils/spfParser';
+import { SPFMacroAnalysis } from '@/components/spf/SPFMacroAnalysis';
 
 interface SPFAnalysisDashboardProps {
   initialDomain?: string;
@@ -128,13 +129,14 @@ const SPFAnalysisDashboard: React.FC<SPFAnalysisDashboardProps> = ({ initialDoma
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="mechanisms">Mechanisms</TabsTrigger>
+            {analysis.record.hasMacros && <TabsTrigger value="macros">Macros</TabsTrigger>}
             <TabsTrigger value="optimization">Optimization</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
             {/* Risk Level Overview */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <Card>
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
@@ -197,6 +199,31 @@ const SPFAnalysisDashboard: React.FC<SPFAnalysisDashboardProps> = ({ initialDoma
                     </div>
                     <Zap className="w-8 h-8 text-primary" />
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">Macros</p>
+                      <p className="text-2xl font-bold">{analysis.record.macroCount}</p>
+                    </div>
+                    <div className="text-primary">
+                      {analysis.record.hasMacros ? '⚙️' : '✓'}
+                    </div>
+                  </div>
+                  {analysis.record.hasMacros && (
+                    <div className="mt-2">
+                      <Badge variant={
+                        analysis.record.macroSecurityRisk === 'critical' ? 'destructive' :
+                        analysis.record.macroSecurityRisk === 'high' ? 'destructive' :
+                        analysis.record.macroSecurityRisk === 'medium' ? 'secondary' : 'default'
+                      }>
+                        {analysis.record.macroSecurityRisk} risk
+                      </Badge>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -271,6 +298,11 @@ const SPFAnalysisDashboard: React.FC<SPFAnalysisDashboardProps> = ({ initialDoma
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">{mechanism.type}</Badge>
                             <code className="text-sm">{mechanism.qualifier}{mechanism.type}{mechanism.value ? `:${mechanism.value}` : ''}</code>
+                            {mechanism.hasMacros && (
+                              <Badge variant="secondary" className="text-xs">
+                                {mechanism.macroCount} macro{mechanism.macroCount !== 1 ? 's' : ''}
+                              </Badge>
+                            )}
                           </div>
                           {mechanism.errors.length > 0 && (
                             <div className="mt-1">
@@ -294,6 +326,11 @@ const SPFAnalysisDashboard: React.FC<SPFAnalysisDashboardProps> = ({ initialDoma
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">modifier</Badge>
                             <code className="text-sm">{modifier.type}={modifier.value}</code>
+                            {modifier.hasMacros && (
+                              <Badge variant="secondary" className="text-xs">
+                                {modifier.macroCount} macro{modifier.macroCount !== 1 ? 's' : ''}
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <div className="text-right">
@@ -308,6 +345,27 @@ const SPFAnalysisDashboard: React.FC<SPFAnalysisDashboardProps> = ({ initialDoma
               </CardContent>
             </Card>
           </TabsContent>
+
+          {analysis.record.hasMacros && (
+            <TabsContent value="macros" className="space-y-4">
+              {analysis.macroAnalysis ? (
+                <SPFMacroAnalysis 
+                  analysis={analysis.macroAnalysis}
+                  spfRecord={analysis.record}
+                />
+              ) : (
+                <Card>
+                  <CardContent className="p-8 text-center">
+                    <AlertTriangle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold mb-2">Macro Analysis Unavailable</h3>
+                    <p className="text-muted-foreground">
+                      Detailed macro analysis could not be loaded for this record.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+          )}
 
           <TabsContent value="optimization" className="space-y-4">
             {analysis.optimizationSuggestions.length > 0 ? (

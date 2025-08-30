@@ -274,6 +274,21 @@ const SPFFlattener: React.FC<SPFFlattenerProps> = ({ selectedDomain, onSave }) =
         </AlertDescription>
       </Alert>
 
+      {/* Macro Warning */}
+      {analysis.record.hasMacros && (
+        <Alert>
+          <XCircle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Macro Warning:</strong> This SPF record contains {analysis.record.macroCount} macro{analysis.record.macroCount !== 1 ? 's' : ''} with {analysis.record.macroSecurityRisk} security risk. 
+            Flattening may break dynamic functionality. Review macro usage before proceeding.
+            {analysis.record.macroSecurityRisk === 'high' || analysis.record.macroSecurityRisk === 'critical' 
+              ? ' Consider addressing security concerns before flattening.'
+              : ''
+            }
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Selection Panel */}
         <div className="space-y-4">

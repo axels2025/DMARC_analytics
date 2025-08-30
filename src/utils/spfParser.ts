@@ -1,3 +1,6 @@
+// Macro support import
+import { parseSPFMacros } from './spfMacroParser';
+
 export interface SPFRecord {
   raw: string;
   version: string;
@@ -7,6 +10,11 @@ export interface SPFRecord {
   isValid: boolean;
   errors: string[];
   warnings: string[];
+  // Macro support
+  hasMacros: boolean;
+  macroCount: number;
+  macroComplexityScore: number;
+  macroSecurityRisk: 'low' | 'medium' | 'high' | 'critical';
 }
 
 export interface SPFMechanism {
@@ -17,12 +25,20 @@ export interface SPFMechanism {
   resolvedIPs: string[];
   subdomain?: string;
   errors: string[];
+  // Macro support
+  hasMacros: boolean;
+  macroCount: number;
+  macroPatterns: string[];
 }
 
 export interface SPFModifier {
   type: 'redirect' | 'exp' | string;
   value: string;
   lookupCount: number;
+  // Macro support
+  hasMacros: boolean;
+  macroCount: number;
+  macroPatterns: string[];
 }
 
 export interface SPFAnalysis {
@@ -31,6 +47,8 @@ export interface SPFAnalysis {
   optimizationSuggestions: OptimizationSuggestion[];
   riskLevel: 'low' | 'medium' | 'high' | 'critical';
   complianceStatus: 'compliant' | 'warning' | 'failing';
+  // Macro analysis
+  macroAnalysis?: import('./spfMacroAnalysis').SPFRecordMacroAnalysis;
 }
 
 export interface LookupBreakdown {
@@ -180,6 +198,100 @@ function validateDomain(domain: string): string {
   return sanitized;
 }
 
+/**
+ * Analyze macros within an SPF record and update macro-related fields
+ */
+function analyzeMacrosInSPFRecord(record: SPFRecord): void {
+  let totalMacroCount = 0;
+  let maxSecurityRisk: 'low' | 'medium' | 'high' | 'critical' = 'low';
+  let totalComplexityScore = 0;
+  
+  // Analyze mechanisms for macros
+  record.mechanisms.forEach(mechanism => {
+    const macroAnalysis = parseSPFMacros(mechanism.value || '');
+    mechanism.hasMacros = macroAnalysis.totalMacros > 0;
+    mechanism.macroCount = macroAnalysis.totalMacros;
+    mechanism.macroPatterns = macroAnalysis.macros.map(m => m.raw);
+    
+    totalMacroCount += macroAnalysis.totalMacros;
+    totalComplexityScore += macroAnalysis.complexityScore;
+    
+    // Update security risk level
+    const riskLevels = ['low', 'medium', 'high', 'critical'];
+    macroAnalysis.macros.forEach(macro => {
+      const currentIndex = riskLevels.indexOf(macro.securityRisk);
+      const maxIndex = riskLevels.indexOf(maxSecurityRisk);
+      if (currentIndex > maxIndex) {
+        maxSecurityRisk = macro.securityRisk;
+      }
+    });
+    
+    // Add macro-specific warnings
+    if (macroAnalysis.macros.length > 0) {
+      if (macroAnalysis.securityRisks.length > 0) {
+        mechanism.errors.push(...macroAnalysis.securityRisks.map(risk => `Macro security concern: ${risk}`));
+      }
+      
+      if (macroAnalysis.performanceWarnings.length > 0) {
+        record.warnings.push(...macroAnalysis.performanceWarnings.map(warning => `${mechanism.type} mechanism: ${warning}`));
+      }
+    }
+  });
+  
+  // Analyze modifiers for macros
+  record.modifiers.forEach(modifier => {
+    const macroAnalysis = parseSPFMacros(modifier.value);
+    modifier.hasMacros = macroAnalysis.totalMacros > 0;
+    modifier.macroCount = macroAnalysis.totalMacros;
+    modifier.macroPatterns = macroAnalysis.macros.map(m => m.raw);
+    
+    totalMacroCount += macroAnalysis.totalMacros;
+    totalComplexityScore += macroAnalysis.complexityScore;
+    
+    // Update security risk level
+    const riskLevels = ['low', 'medium', 'high', 'critical'];
+    macroAnalysis.macros.forEach(macro => {
+      const currentIndex = riskLevels.indexOf(macro.securityRisk);
+      const maxIndex = riskLevels.indexOf(maxSecurityRisk);
+      if (currentIndex > maxIndex) {
+        maxSecurityRisk = macro.securityRisk;
+      }
+    });
+    
+    // Add macro-specific warnings
+    if (macroAnalysis.macros.length > 0) {
+      if (macroAnalysis.securityRisks.length > 0) {
+        record.warnings.push(...macroAnalysis.securityRisks.map(risk => `${modifier.type} modifier: ${risk}`));
+      }
+      
+      if (macroAnalysis.performanceWarnings.length > 0) {
+        record.warnings.push(...macroAnalysis.performanceWarnings.map(warning => `${modifier.type} modifier: ${warning}`));
+      }
+    }
+  });
+  
+  // Update record-level macro information
+  record.hasMacros = totalMacroCount > 0;
+  record.macroCount = totalMacroCount;
+  record.macroComplexityScore = totalComplexityScore;
+  record.macroSecurityRisk = maxSecurityRisk;
+  
+  // Add overall macro warnings
+  if (record.hasMacros) {
+    if (totalMacroCount > 5) {
+      record.warnings.push('High number of macros may impact SPF processing performance');
+    }
+    
+    if (maxSecurityRisk === 'high' || maxSecurityRisk === 'critical') {
+      record.warnings.push('SPF record contains high-risk macros that may pose security concerns');
+    }
+    
+    if (totalComplexityScore > 70) {
+      record.warnings.push('Complex macro usage may make SPF record difficult to maintain');
+    }
+  }
+}
+
 export function parseSPFRecordFromString(spfString: string): SPFRecord {
   const record: SPFRecord = {
     raw: spfString.trim(),
@@ -189,7 +301,12 @@ export function parseSPFRecordFromString(spfString: string): SPFRecord {
     totalLookups: 0,
     isValid: false,
     errors: [],
-    warnings: []
+    warnings: [],
+    // Initialize macro fields
+    hasMacros: false,
+    macroCount: 0,
+    macroComplexityScore: 0,
+    macroSecurityRisk: 'low'
   };
 
   if (!spfString.trim()) {
@@ -220,7 +337,11 @@ export function parseSPFRecordFromString(spfString: string): SPFRecord {
       record.modifiers.push({
         type,
         value: sanitizeText(value),
-        lookupCount
+        lookupCount,
+        // Initialize macro fields - will be populated by analyzeMacrosInSPFRecord
+        hasMacros: false,
+        macroCount: 0,
+        macroPatterns: []
       });
       
       record.totalLookups += lookupCount;
@@ -254,6 +375,9 @@ export function parseSPFRecordFromString(spfString: string): SPFRecord {
   if (hasPTR) {
     record.warnings.push('SPF record contains PTR mechanism which is deprecated and slow. Consider replacing with ip4/ip6.');
   }
+
+  // Analyze macros in the SPF record
+  analyzeMacrosInSPFRecord(record);
 
   return record;
 }
@@ -354,7 +478,11 @@ function parseMechanism(mechanismString: string): SPFMechanism | null {
     lookupCount,
     resolvedIPs: [],
     subdomain,
-    errors: []
+    errors: [],
+    // Initialize macro fields - will be populated by analyzeMacrosInSPFRecord
+    hasMacros: false,
+    macroCount: 0,
+    macroPatterns: []
   };
 }
 
@@ -396,7 +524,12 @@ export async function parseSPFRecord(domain: string): Promise<SPFRecord> {
         totalLookups: 0,
         isValid: false,
         errors: [`No SPF record found for domain: ${domain}`],
-        warnings: []
+        warnings: [],
+        // Initialize macro fields
+        hasMacros: false,
+        macroCount: 0,
+        macroComplexityScore: 0,
+        macroSecurityRisk: 'low'
       };
     }
 
@@ -410,15 +543,37 @@ export async function parseSPFRecord(domain: string): Promise<SPFRecord> {
       totalLookups: 0,
       isValid: false,
       errors: [`Failed to retrieve SPF record for domain ${domain}: ${error}`],
-      warnings: []
+      warnings: [],
+      // Initialize macro fields
+      hasMacros: false,
+      macroCount: 0,
+      macroComplexityScore: 0,
+      macroSecurityRisk: 'low'
     };
   }
 }
 
 export async function analyzeSPFRecord(record: SPFRecord): Promise<SPFAnalysis> {
   const lookupBreakdown = calculateLookupBreakdown(record);
-  const riskLevel = calculateRiskLevel(record.totalLookups);
+  let riskLevel = calculateRiskLevel(record.totalLookups, record);
   const complianceStatus = calculateComplianceStatus(record);
+  
+  // Include macro analysis if macros are present
+  let macroAnalysis: import('./spfMacroAnalysis').SPFRecordMacroAnalysis | undefined;
+  if (record.hasMacros) {
+    try {
+      const { analyzeSPFRecordMacros } = await import('./spfMacroAnalysis');
+      macroAnalysis = analyzeSPFRecordMacros(record);
+      
+      // Upgrade risk level if macro analysis indicates higher risk
+      if (macroAnalysis.securityAssessment.riskLevel === 'critical' || 
+          (macroAnalysis.securityAssessment.riskLevel === 'high' && riskLevel !== 'critical')) {
+        riskLevel = macroAnalysis.securityAssessment.riskLevel;
+      }
+    } catch (error) {
+      console.warn('Failed to load macro analysis:', error);
+    }
+  }
   
   // Basic optimization suggestions (will be enhanced by spfOptimizer.ts)
   const optimizationSuggestions: OptimizationSuggestion[] = [];
@@ -458,7 +613,8 @@ export async function analyzeSPFRecord(record: SPFRecord): Promise<SPFAnalysis> 
     lookupBreakdown,
     optimizationSuggestions,
     riskLevel,
-    complianceStatus
+    complianceStatus,
+    macroAnalysis
   };
 }
 
@@ -610,11 +766,27 @@ function calculateLookupBreakdown(record: SPFRecord): LookupBreakdown {
   return breakdown;
 }
 
-function calculateRiskLevel(totalLookups: number): 'low' | 'medium' | 'high' | 'critical' {
-  if (totalLookups >= 10) return 'critical';
-  if (totalLookups >= 8) return 'high';
-  if (totalLookups >= 6) return 'medium';
-  return 'low';
+function calculateRiskLevel(totalLookups: number, record?: SPFRecord): 'low' | 'medium' | 'high' | 'critical' {
+  let riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'low';
+  
+  // Base risk on DNS lookups
+  if (totalLookups >= 10) riskLevel = 'critical';
+  else if (totalLookups >= 8) riskLevel = 'high';
+  else if (totalLookups >= 6) riskLevel = 'medium';
+  
+  // Factor in macro security risk if available
+  if (record && record.hasMacros) {
+    const riskLevels = ['low', 'medium', 'high', 'critical'];
+    const currentIndex = riskLevels.indexOf(riskLevel);
+    const macroIndex = riskLevels.indexOf(record.macroSecurityRisk);
+    
+    // Use the higher of the two risk levels
+    if (macroIndex > currentIndex) {
+      riskLevel = record.macroSecurityRisk;
+    }
+  }
+  
+  return riskLevel;
 }
 
 function calculateComplianceStatus(record: SPFRecord): 'compliant' | 'warning' | 'failing' {
