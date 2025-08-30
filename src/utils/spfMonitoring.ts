@@ -431,9 +431,12 @@ export class SPFMonitor {
   private async resolveIncludeIPs(includeDomain: string): Promise<string[]> {
     try {
       // Use existing DNS lookup function with caching
-      const response = await fetch('/functions/v1/dns-lookup', {
+      const response = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU`
+        },
         body: JSON.stringify({
           spfMonitor: {
             domain: includeDomain,

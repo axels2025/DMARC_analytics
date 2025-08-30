@@ -241,9 +241,12 @@ export async function resolveIncludeChain(
  * Resolve A record to IP addresses
  */
 async function resolveARecord(domain: string): Promise<string[]> {
-  const response = await fetch('/functions/v1/dns-lookup', {
+  const response = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU`
+    },
     body: JSON.stringify({
       domain,
       recordType: 'A'
@@ -267,9 +270,12 @@ async function resolveARecord(domain: string): Promise<string[]> {
  */
 async function resolveMXRecord(domain: string): Promise<string[]> {
   // First get MX records
-  const mxResponse = await fetch('/functions/v1/dns-lookup', {
+  const mxResponse = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU`
+    },
     body: JSON.stringify({
       domain,
       recordType: 'MX'

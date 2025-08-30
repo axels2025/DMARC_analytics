@@ -624,6 +624,9 @@ serve(async (req) => {
 
     const { ip, domain, recordType, spfFlatten, spfMonitor }: DNSLookupRequest = await req.json();
     
+    // Debug logging
+    console.log('DNS Lookup Request:', { ip, domain, recordType, spfFlatten: !!spfFlatten, spfMonitor: !!spfMonitor });
+    
     // Handle SPF monitoring requests (new functionality)
     if (spfMonitor) {
       try {
@@ -706,6 +709,7 @@ serve(async (req) => {
     }
     
     // Handle domain DNS lookups (new functionality for SPF analysis)
+    console.log('Checking domain DNS lookup condition:', { domain, recordType, hassDomain: !!domain, hasRecordType: !!recordType });
     if (domain && recordType) {
       if (!validateDomain(domain)) {
         return new Response(

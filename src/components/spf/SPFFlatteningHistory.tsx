@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,99 +16,53 @@ import {
   AlertTriangle,
   CheckCircle,
   Eye,
-  GitCompare
+  GitCompare,
+  FileSearch
 } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import { useSPFFlatteningHistory, SPFFlatteningOperation } from '@/hooks/useSPFAnalysis';
 
-interface FlatteningHistoryEntry {
-  id: string;
-  domain: string;
-  timestamp: string;
-  originalRecord: string;
-  flattenedRecord: string;
-  includesFlattened: string[];
-  lookupsBefore: number;
-  lookupsAfter: number;
-  ipCountBefore: number;
-  ipCountAfter: number;
-  status: 'active' | 'reverted' | 'outdated';
-}
+// Using SPFFlatteningOperation from the hook instead of FlatteningHistoryEntry
 
 interface SPFFlatteningHistoryProps {
   domain?: string;
-  onRevert?: (entry: FlatteningHistoryEntry) => void;
-  onViewDetails?: (entry: FlatteningHistoryEntry) => void;
+  onRevert?: (entry: SPFFlatteningOperation) => void;
+  onViewDetails?: (entry: SPFFlatteningOperation) => void;
 }
 
-// Mock data - in real implementation this would come from the database
-const mockHistory: FlatteningHistoryEntry[] = [
-  {
-    id: '1',
-    domain: 'example.com',
-    timestamp: '2024-03-15T10:30:00Z',
-    originalRecord: 'v=spf1 include:_spf.google.com include:mailgun.org include:sendgrid.net mx ~all',
-    flattenedRecord: 'v=spf1 ip4:108.177.8.0/24 ip4:173.194.0.0/16 ip4:192.30.252.0/22 ip4:198.37.147.0/24 ip4:167.89.0.0/17 mx ~all',
-    includesFlattened: ['_spf.google.com', 'mailgun.org', 'sendgrid.net'],
-    lookupsBefore: 4,
-    lookupsAfter: 1,
-    ipCountBefore: 0,
-    ipCountAfter: 5,
-    status: 'active'
-  },
-  {
-    id: '2',
-    domain: 'example.com',
-    timestamp: '2024-03-10T14:20:00Z',
-    originalRecord: 'v=spf1 include:_spf.google.com include:mailgun.org mx a ~all',
-    flattenedRecord: 'v=spf1 ip4:108.177.8.0/24 ip4:173.194.0.0/16 ip4:198.37.147.0/24 mx a ~all',
-    includesFlattened: ['_spf.google.com', 'mailgun.org'],
-    lookupsBefore: 4,
-    lookupsAfter: 2,
-    ipCountBefore: 0,
-    ipCountAfter: 3,
-    status: 'reverted'
-  },
-  {
-    id: '3',
-    domain: 'test.com',
-    timestamp: '2024-03-08T09:15:00Z',
-    originalRecord: 'v=spf1 include:_spf.google.com include:_spf.salesforce.com mx ~all',
-    flattenedRecord: 'v=spf1 ip4:108.177.8.0/24 ip4:136.147.0.0/16 ip4:96.43.144.0/20 mx ~all',
-    includesFlattened: ['_spf.google.com', '_spf.salesforce.com'],
-    lookupsBefore: 3,
-    lookupsAfter: 1,
-    ipCountBefore: 0,
-    ipCountAfter: 3,
-    status: 'outdated'
-  }
-];
+// Removed mock data - now using real database queries via useSPFFlatteningHistory hook
 
 const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({ 
   domain, 
   onRevert, 
   onViewDetails 
 }) => {
-  const [selectedEntry, setSelectedEntry] = useState<FlatteningHistoryEntry | null>(null);
+  const [selectedEntry, setSelectedEntry] = useState<SPFFlatteningOperation | null>(null);
   const [viewMode, setViewMode] = useState<'timeline' | 'comparison'>('timeline');
-
-  // Filter history by domain if specified
-  const filteredHistory = domain 
-    ? mockHistory.filter(entry => entry.domain === domain)
-    : mockHistory;
+  
+  // Use the proper database hook
+  const { operations: filteredHistory, loading, error, fetchOperations } = useSPFFlatteningHistory(domain);
+  
+  useEffect(() => {
+    fetchOperations();
+  }, [fetchOperations]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'active': return 'bg-green-500';
+      case 'completed': return 'bg-green-500';
       case 'reverted': return 'bg-gray-500';
-      case 'outdated': return 'bg-yellow-500';
+      case 'failed': return 'bg-red-500';
+      case 'pending': return 'bg-yellow-500';
       default: return 'bg-gray-500';
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'active': return <CheckCircle className="w-4 h-4 text-green-600" />;
+      case 'completed': return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'reverted': return <RotateCcw className="w-4 h-4 text-gray-600" />;
-      case 'outdated': return <AlertTriangle className="w-4 h-4 text-yellow-600" />;
+      case 'failed': return <AlertTriangle className="w-4 h-4 text-red-600" />;
+      case 'pending': return <AlertTriangle className="w-4 h-4 text-yellow-600" />;
       default: return <AlertTriangle className="w-4 h-4 text-gray-600" />;
     }
   };
@@ -142,18 +96,65 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
 
   const diffStats = getDiffStats();
 
+  // Show loading state
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <h3 className="text-lg font-semibold mb-2">Loading History</h3>
+          <p className="text-muted-foreground">
+            Fetching your SPF flattening operations...
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center">
+          <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold mb-2 text-red-600">Error Loading History</h3>
+          <p className="text-muted-foreground mb-4">
+            {error}
+          </p>
+          <Button onClick={fetchOperations} variant="outline">
+            <RotateCcw className="w-4 h-4 mr-2" />
+            Try Again
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Show empty state
   if (filteredHistory.length === 0) {
     return (
       <Card>
         <CardContent className="p-8 text-center">
-          <History className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold mb-2">No Flattening History</h3>
-          <p className="text-muted-foreground">
+          <FileSearch className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold mb-2">No SPF Flattening Operations Found</h3>
+          <p className="text-muted-foreground mb-4">
             {domain 
-              ? `No flattening operations have been performed for ${domain}`
-              : 'No SPF flattening operations have been performed yet'
+              ? `No flattening operations have been performed for ${domain}.`
+              : 'No SPF flattening operations have been performed yet.'
             }
           </p>
+          <p className="text-sm text-muted-foreground mb-6">
+            Perform your first SPF analysis to see flattening history here. SPF flattening helps reduce DNS lookups by replacing include mechanisms with direct IP addresses.
+          </p>
+          <div className="space-y-2 text-sm text-left bg-gray-50 p-4 rounded-lg max-w-md mx-auto">
+            <h4 className="font-medium">Getting Started:</h4>
+            <ul className="space-y-1 text-muted-foreground">
+              <li>• Analyze a domain's SPF record</li>
+              <li>• Select includes to flatten</li>
+              <li>• Review and apply changes</li>
+              <li>• Monitor results here</li>
+            </ul>
+          </div>
         </CardContent>
       </Card>
     );
@@ -234,7 +235,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                               </div>
                               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                 <Calendar className="w-4 h-4" />
-                                {formatDate(entry.timestamp)}
+                                {formatDate(entry.createdAt)}
                               </div>
                             </div>
                             
@@ -242,7 +243,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                               <div>
                                 <p className="font-medium">DNS Lookups</p>
                                 <p className="text-muted-foreground">
-                                  {entry.lookupsBefore} → {entry.lookupsAfter}
+                                  {entry.originalLookupCount} → {entry.newLookupCount || 0}
                                   {savings.lookupSavings > 0 && (
                                     <span className="text-green-600 ml-1">
                                       (-{savings.lookupSavings})
@@ -253,7 +254,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                               <div>
                                 <p className="font-medium">IP Addresses</p>
                                 <p className="text-muted-foreground">
-                                  {entry.ipCountBefore} → {entry.ipCountAfter}
+                                  0 → {entry.ipCount || 0}
                                   {savings.ipAddition > 0 && (
                                     <span className="text-blue-600 ml-1">
                                       (+{savings.ipAddition})
@@ -262,9 +263,9 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                                 </p>
                               </div>
                               <div>
-                                <p className="font-medium">Flattened Includes</p>
+                                <p className="font-medium">Target Includes</p>
                                 <p className="text-muted-foreground">
-                                  {entry.includesFlattened.length} domains
+                                  {entry.targetIncludes.length} domains
                                 </p>
                               </div>
                               <div className="flex items-center gap-2">
@@ -277,7 +278,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                                   <Eye className="w-3 h-3" />
                                   View
                                 </Button>
-                                {entry.status === 'active' && onRevert && (
+                                {entry.status === 'completed' && onRevert && (
                                   <Button
                                     variant="outline"
                                     size="sm"
@@ -291,9 +292,9 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                               </div>
                             </div>
                             
-                            {/* Flattened includes */}
+                            {/* Target includes */}
                             <div className="mt-2 flex flex-wrap gap-1">
-                              {entry.includesFlattened.map((include) => (
+                              {entry.targetIncludes.map((include) => (
                                 <Badge key={include} variant="secondary" className="text-xs">
                                   {include}
                                 </Badge>
@@ -333,13 +334,13 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                       <div className="p-3 border rounded">
                         <p className="font-semibold text-gray-700">DNS Lookups</p>
                         <p className="text-2xl font-bold text-red-600">
-                          {selectedEntry.lookupsBefore}
+                          {selectedEntry.originalLookupCount}
                         </p>
                       </div>
                       <div className="p-3 border rounded">
                         <p className="font-semibold text-gray-700">IP Addresses</p>
                         <p className="text-2xl font-bold text-gray-600">
-                          {selectedEntry.ipCountBefore}
+                          0
                         </p>
                       </div>
                     </div>
@@ -357,7 +358,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => copyToClipboard(selectedEntry.flattenedRecord)}
+                      onClick={() => copyToClipboard(selectedEntry.flattenedRecord || '')}
                       className="flex items-center gap-1"
                     >
                       <Copy className="w-3 h-3" />
@@ -370,7 +371,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                     <div>
                       <Label>Flattened SPF Record:</Label>
                       <div className="mt-2 p-3 bg-green-100 rounded border font-mono text-sm break-all">
-                        {selectedEntry.flattenedRecord}
+                        {selectedEntry.flattenedRecord || 'No flattened record available'}
                       </div>
                     </div>
                     
@@ -378,27 +379,27 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                       <div className="p-3 border rounded">
                         <p className="font-semibold text-green-700">DNS Lookups</p>
                         <p className="text-2xl font-bold text-green-600">
-                          {selectedEntry.lookupsAfter}
+                          {selectedEntry.newLookupCount || 0}
                         </p>
                         <p className="text-sm text-green-600">
-                          -{selectedEntry.lookupsBefore - selectedEntry.lookupsAfter} saved
+                          -{selectedEntry.originalLookupCount - (selectedEntry.newLookupCount || 0)} saved
                         </p>
                       </div>
                       <div className="p-3 border rounded">
                         <p className="font-semibold text-blue-700">IP Addresses</p>
                         <p className="text-2xl font-bold text-blue-600">
-                          {selectedEntry.ipCountAfter}
+                          {selectedEntry.ipCount || 0}
                         </p>
                         <p className="text-sm text-blue-600">
-                          +{selectedEntry.ipCountAfter - selectedEntry.ipCountBefore} added
+                          +{selectedEntry.ipCount || 0} added
                         </p>
                       </div>
                     </div>
 
                     <div>
-                      <p className="font-semibold mb-2">Flattened Includes:</p>
+                      <p className="font-semibold mb-2">Target Includes:</p>
                       <div className="flex flex-wrap gap-1">
-                        {selectedEntry.includesFlattened.map((include) => (
+                        {selectedEntry.targetIncludes.map((include) => (
                           <Badge key={include} variant="outline" className="text-xs">
                             {include}
                           </Badge>
@@ -433,11 +434,11 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {(() => {
                 const totalLookupSavings = filteredHistory
-                  .filter(entry => entry.status === 'active')
-                  .reduce((total, entry) => total + (entry.lookupsBefore - entry.lookupsAfter), 0);
+                  .filter(entry => entry.status === 'completed')
+                  .reduce((total, entry) => total + (entry.originalLookupCount - (entry.newLookupCount || 0)), 0);
                 
                 const totalOperations = filteredHistory.length;
-                const activeOperations = filteredHistory.filter(entry => entry.status === 'active').length;
+                const activeOperations = filteredHistory.filter(entry => entry.status === 'completed').length;
 
                 return (
                   <>
@@ -453,7 +454,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
                       <div className="flex items-center gap-2 mb-2">
                         <CheckCircle className="w-5 h-5 text-blue-600" />
-                        <span className="font-semibold text-blue-800">Active Flattenings</span>
+                        <span className="font-semibold text-blue-800">Completed Flattenings</span>
                       </div>
                       <p className="text-3xl font-bold text-blue-600">{activeOperations}</p>
                       <p className="text-sm text-blue-600">of {totalOperations} operations</p>
@@ -465,7 +466,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
                         <span className="font-semibold text-purple-800">Domains Optimized</span>
                       </div>
                       <p className="text-3xl font-bold text-purple-600">
-                        {new Set(filteredHistory.filter(e => e.status === 'active').map(e => e.domain)).size}
+                        {new Set(filteredHistory.filter(e => e.status === 'completed').map(e => e.domain)).size}
                       </p>
                       <p className="text-sm text-purple-600">unique domains</p>
                     </div>

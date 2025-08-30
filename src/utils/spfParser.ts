@@ -76,7 +76,7 @@ class SPFResolver {
   private cache: Map<string, { data: string[]; timestamp: number }> = new Map();
   private lookupCounter: number = 0;
   private readonly CACHE_TTL = 60 * 60 * 1000; // 1 hour cache like existing system
-  private readonly DNS_FUNCTION_URL = '/functions/v1/dns-lookup';
+  private readonly DNS_FUNCTION_URL = 'https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup';
 
   async resolveTXT(domain: string): Promise<string[]> {
     return this.makeRequest(domain, 'TXT');
@@ -110,6 +110,7 @@ class SPFResolver {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU`
         },
         body: JSON.stringify({
           domain,
@@ -118,7 +119,14 @@ class SPFResolver {
       });
 
       if (!response.ok) {
-        throw new Error(`DNS lookup failed: ${response.status}`);
+        const errorText = await response.text();
+        console.error(`DNS lookup failed for ${domain}:`, {
+          status: response.status,
+          statusText: response.statusText,
+          errorResponse: errorText,
+          requestPayload: { domain, recordType }
+        });
+        throw new Error(`DNS lookup failed: ${response.status} - ${errorText}`);
       }
 
       const result: DNSLookupResponse = await response.json();

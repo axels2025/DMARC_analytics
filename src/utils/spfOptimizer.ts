@@ -468,9 +468,12 @@ export class SPFOptimizer {
 
     try {
       // Make DNS request to resolve TXT record
-      const response = await fetch('/functions/v1/dns-lookup', {
+      const response = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVwemN3cGxib3VoYnVjYm1oY3VyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3MTk5NDIsImV4cCI6MjA2ODI5NTk0Mn0.l54eLAp-3kwOHvF3qTVMDVTorYGzGeMmju1YsIFFUeU`
+        },
         body: JSON.stringify({
           domain: includeDomain,
           recordType: 'TXT'
@@ -544,9 +547,12 @@ export class SPFOptimizer {
 
     try {
       if (mechanism.type === 'a') {
-        const response = await fetch('/functions/v1/dns-lookup', {
+        const response = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+          },
           body: JSON.stringify({
             domain,
             recordType: 'A'
@@ -560,9 +566,12 @@ export class SPFOptimizer {
           }
         }
       } else if (mechanism.type === 'mx') {
-        const response = await fetch('/functions/v1/dns-lookup', {
+        const response = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+          },
           body: JSON.stringify({
             domain,
             recordType: 'MX'
@@ -577,9 +586,12 @@ export class SPFOptimizer {
               const parts = mxRecord.split(' ');
               const mxHostname = parts.length > 1 ? parts[1] : parts[0];
               
-              const aResponse = await fetch('/functions/v1/dns-lookup', {
+              const aResponse = await fetch('https://epzcwplbouhbucbmhcur.supabase.co/functions/v1/dns-lookup', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+                },
                 body: JSON.stringify({
                   domain: mxHostname,
                   recordType: 'A'
