@@ -1,4 +1,6 @@
 import { gmailAuthService, GmailAuthCredentials } from './gmailAuth';
+import * as pako from 'pako';
+import JSZip from 'jszip';
 
 export interface GmailMessage {
   id: string;
@@ -228,26 +230,67 @@ class GmailService {
            /report.*domain.*\.xml$/.test(lowerFilename);
   }
 
-  // Decompress attachment data if needed
-  async decompressAttachment(attachment: DmarcAttachment): Promise<string> {
+  // Decompress attachment data if needed - returns array of XML content strings
+  async decompressAttachment(attachment: DmarcAttachment): Promise<string[]> {
     const filename = attachment.filename.toLowerCase();
     
-    // Decode base64
-    const binaryData = atob(attachment.data.replace(/-/g, '+').replace(/_/g, '/'));
-    
-    // If it's a zip or gz file, we'd need a decompression library
-    // For now, assume XML files are not compressed
-    if (filename.endsWith('.xml')) {
-      return binaryData;
+    try {
+      // Decode base64
+      const binaryData = atob(attachment.data.replace(/-/g, '+').replace(/_/g, '/'));
+      const uint8Array = new Uint8Array(binaryData.length);
+      for (let i = 0; i < binaryData.length; i++) {
+        uint8Array[i] = binaryData.charCodeAt(i);
+      }
+      
+      // Handle raw XML files
+      if (filename.endsWith('.xml')) {
+        return [binaryData];
+      }
+      
+      // Handle gzip compressed files
+      if (filename.endsWith('.gz') || filename.endsWith('.gzip')) {
+        try {
+          const decompressed = pako.inflate(uint8Array, { to: 'string' });
+          return [decompressed];
+        } catch (error) {
+          throw new Error(`Failed to decompress gzip file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      // Handle ZIP archives
+      if (filename.endsWith('.zip')) {
+        try {
+          const zip = await JSZip.loadAsync(uint8Array);
+          const xmlFiles: string[] = [];
+          
+          // Extract all XML files from the zip
+          for (const [entryFilename, file] of Object.entries(zip.files)) {
+            if (!file.dir && entryFilename.toLowerCase().endsWith('.xml')) {
+              try {
+                const content = await file.async('string');
+                xmlFiles.push(content);
+              } catch (error) {
+                console.warn(`Failed to extract ${entryFilename} from ZIP:`, error);
+              }
+            }
+          }
+          
+          if (xmlFiles.length === 0) {
+            throw new Error(`No XML files found in ZIP archive ${filename}`);
+          }
+          
+          console.log(`Extracted ${xmlFiles.length} XML files from ${filename}`);
+          return xmlFiles;
+        } catch (error) {
+          throw new Error(`Failed to decompress ZIP file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      throw new Error(`Unsupported file format: ${filename}. Supported formats: .xml, .gz, .gzip, .zip`);
+    } catch (error) {
+      console.error(`Error decompressing attachment ${filename}:`, error);
+      throw error;
     }
-    
-    if (filename.endsWith('.zip') || filename.endsWith('.gz')) {
-      // TODO: Implement decompression using a library like pako
-      console.warn('Compressed files not yet supported:', filename);
-      throw new Error(`Compressed files (${filename}) are not yet supported. Please implement decompression.`);
-    }
-    
-    return binaryData;
   }
 
   // Get recent sync statistics

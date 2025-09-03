@@ -73,7 +73,7 @@ class EmailProcessor {
 
       onProgress?.({
         phase: 'processing',
-        message: `Found ${attachments.length} DMARC attachments. Processing reports...`,
+        message: `Found ${attachments.length} DMARC attachments. Decompressing and processing reports...`,
         attachmentsFound: attachments.length
       });
 
@@ -108,9 +108,12 @@ class EmailProcessor {
         result.errors.length > 0 ? result.errors.join('; ') : undefined
       );
 
+      const compressionMessage = attachments.length > 0 ? 
+        ` (including compressed .zip and .gz files)` : '';
+        
       onProgress?.({
         phase: 'completed',
-        message: `Sync completed! Processed ${result.reportsProcessed} reports, skipped ${result.reportsSkipped} duplicates.`,
+        message: `Sync completed! Processed ${result.reportsProcessed} reports${compressionMessage}, skipped ${result.reportsSkipped} duplicates.`,
         processed: result.reportsProcessed,
         skipped: result.reportsSkipped,
         errors: result.errors.length
@@ -163,9 +166,13 @@ class EmailProcessor {
       const attachment = attachments[i];
       
       try {
+        const fileType = attachment.filename.toLowerCase().endsWith('.zip') ? 'ZIP archive' :
+                         attachment.filename.toLowerCase().endsWith('.gz') || attachment.filename.toLowerCase().endsWith('.gzip') ? 'gzipped file' :
+                         'XML file';
+                         
         onProgress?.({
           phase: 'processing',
-          message: `Processing ${attachment.filename} (${i + 1}/${attachments.length})...`,
+          message: `Processing ${fileType}: ${attachment.filename} (${i + 1}/${attachments.length})...`,
           processed,
           skipped,
           errors: errors.length
@@ -194,15 +201,65 @@ class EmailProcessor {
     return { processed, skipped, errors };
   }
 
-  // Process a single DMARC attachment
+  // Process a single DMARC attachment (may contain multiple XML files)
   private async processSingleAttachment(
     attachment: DmarcAttachment,
     userId: string
   ): Promise<'processed' | 'skipped' | 'error'> {
     try {
-      // Decompress if needed
-      const xmlContent = await gmailService.decompressAttachment(attachment);
+      // Decompress attachment - returns array of XML content strings
+      const xmlContents = await gmailService.decompressAttachment(attachment);
       
+      let processedCount = 0;
+      let skippedCount = 0;
+      const errors: string[] = [];
+
+      // Process each XML file
+      for (let i = 0; i < xmlContents.length; i++) {
+        const xmlContent = xmlContents[i];
+        const xmlFilename = xmlContents.length > 1 
+          ? `${attachment.filename}_${i + 1}.xml` 
+          : attachment.filename;
+        
+        try {
+          const result = await this.processSingleReport(xmlContent, xmlFilename, userId);
+          if (result === 'processed') {
+            processedCount++;
+          } else if (result === 'skipped') {
+            skippedCount++;
+          }
+        } catch (error) {
+          const errorMsg = `Error processing XML ${i + 1} from ${attachment.filename}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+          errors.push(errorMsg);
+          console.error(errorMsg, error);
+        }
+      }
+
+      // Log results for this attachment
+      console.log(`Attachment ${attachment.filename}: processed ${processedCount}, skipped ${skippedCount}, errors ${errors.length}`);
+
+      // Return overall result - if any files were processed, consider it successful
+      if (processedCount > 0) {
+        return 'processed';
+      } else if (skippedCount > 0 && errors.length === 0) {
+        return 'skipped';
+      } else {
+        throw new Error(`Failed to process any reports from ${attachment.filename}. Errors: ${errors.join('; ')}`);
+      }
+
+    } catch (error) {
+      console.error(`Failed to process attachment ${attachment.filename}:`, error);
+      throw error;
+    }
+  }
+
+  // Process a single DMARC XML report
+  private async processSingleReport(
+    xmlContent: string,
+    xmlFilename: string,
+    userId: string
+  ): Promise<'processed' | 'skipped'> {
+    try {
       // Parse DMARC XML
       const dmarcReport = await parseDmarcXml(xmlContent);
       
@@ -216,18 +273,18 @@ class EmailProcessor {
         .single();
 
       if (existingReport) {
-        console.log(`Skipping duplicate report: ${dmarcReport.reportMetadata.reportId}`);
+        console.log(`Skipping duplicate report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
         return 'skipped';
       }
 
       // Save to database
       await saveDmarcReport(dmarcReport, userId, xmlContent);
       
-      console.log(`Successfully processed DMARC report: ${dmarcReport.reportMetadata.reportId}`);
+      console.log(`Successfully processed DMARC report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
       return 'processed';
 
     } catch (error) {
-      console.error(`Failed to process attachment ${attachment.filename}:`, error);
+      console.error(`Failed to process XML report from ${xmlFilename}:`, error);
       throw error;
     }
   }
