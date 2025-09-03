@@ -336,6 +336,107 @@ export type Database = {
         }
         Relationships: []
       }
+      user_email_configs: {
+        Row: {
+          id: string
+          user_id: string
+          provider: string
+          email_address: string
+          access_token: string | null
+          refresh_token: string | null
+          expires_at: string | null
+          last_sync_at: string | null
+          sync_status: string
+          last_error_message: string | null
+          is_active: boolean
+          auto_sync_enabled: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          provider: string
+          email_address: string
+          access_token?: string | null
+          refresh_token?: string | null
+          expires_at?: string | null
+          last_sync_at?: string | null
+          sync_status?: string
+          last_error_message?: string | null
+          is_active?: boolean
+          auto_sync_enabled?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          provider?: string
+          email_address?: string
+          access_token?: string | null
+          refresh_token?: string | null
+          expires_at?: string | null
+          last_sync_at?: string | null
+          sync_status?: string
+          last_error_message?: string | null
+          is_active?: boolean
+          auto_sync_enabled?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      email_sync_logs: {
+        Row: {
+          id: string
+          config_id: string
+          user_id: string
+          sync_started_at: string
+          sync_completed_at: string | null
+          status: string
+          emails_fetched: number
+          reports_processed: number
+          reports_skipped: number
+          error_message: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          config_id: string
+          user_id: string
+          sync_started_at: string
+          sync_completed_at?: string | null
+          status?: string
+          emails_fetched?: number
+          reports_processed?: number
+          reports_skipped?: number
+          error_message?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          config_id?: string
+          user_id?: string
+          sync_started_at?: string
+          sync_completed_at?: string | null
+          status?: string
+          emails_fetched?: number
+          reports_processed?: number
+          reports_skipped?: number
+          error_message?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_sync_logs_config_id_fkey"
+            columns: ["config_id"]
+            isOneToOne: false
+            referencedRelation: "user_email_configs"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never

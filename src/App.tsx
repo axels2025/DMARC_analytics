@@ -17,6 +17,7 @@ import AuthGuard from "./components/AuthGuard";
 import { AuthProvider } from "./hooks/useAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import AccountSettings from "./pages/AccountSettings";
+import Settings from "./pages/Settings";
 import PrivacyTestRunner from "./pages/PrivacyTestRunner";
 
 const queryClient = new QueryClient({
@@ -84,6 +85,13 @@ const App = () => {
                     <ProtectedRoute>
                       <Layout>
                         <AccountSettings />
+                      </Layout>
+                    </ProtectedRoute>
+                  } />
+                  <Route path="/settings" element={
+                    <ProtectedRoute>
+                      <Layout>
+                        <Settings />
                       </Layout>
                     </ProtectedRoute>
                   } />

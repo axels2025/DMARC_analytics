@@ -1,9 +1,11 @@
 
 import { Link, useLocation } from "react-router-dom";
-import { Menu, User, LogOut } from "lucide-react";
+import { Menu, User, LogOut, Mail, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { useEmailSync } from "@/hooks/useEmailSync";
+import { GmailOAuthButton, EmailConfigModal } from "@/components/EmailSync";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,11 +21,13 @@ interface LayoutProps {
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
   const { signOut, user } = useAuth();
+  const { activeGmailConfig, isAnySyncing, statusCounts } = useEmailSync();
 
   const navigation = [
     { name: "Dashboard", href: "/dashboard" },
     { name: "Forensics", href: "/forensics" },
     { name: "Upload Report", href: "/upload" },
+    { name: "Gmail Sync", href: "/settings" },
   ];
 
   const isActive = (path: string) => location.pathname === path;
@@ -71,6 +75,18 @@ const Layout = ({ children }: LayoutProps) => {
 
           {/* Right: Actions */}
           <div className="flex items-center gap-2">
+            {/* Gmail Sync Button - Desktop */}
+            {user && (
+              <div className="hidden md:flex items-center gap-2">
+                <Link to="/settings">
+                  <Button variant="outline" size="sm">
+                    <Mail className="w-4 h-4 mr-2" />
+                    Gmail
+                  </Button>
+                </Link>
+              </div>
+            )}
+
             {/* Mobile nav */}
             <div className="md:hidden">
               <DropdownMenu>
@@ -86,6 +102,14 @@ const Layout = ({ children }: LayoutProps) => {
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link to="/settings">
+                      <div className="flex items-center">
+                        <Mail className="mr-2 h-4 w-4" />
+                        Gmail Sync
+                      </div>
+                    </Link>
+                  </DropdownMenuItem>
                   <DropdownMenuItem asChild>
                     <Link to="/account">Account Settings</Link>
                   </DropdownMenuItem>

@@ -41,6 +41,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import InsightsModal from "@/components/InsightsModal";
 import ExportModal from "@/components/ExportModal";
+import { GmailOAuthButton, EmailConfigModal } from "@/components/EmailSync";
+import { useEmailSync } from "@/hooks/useEmailSync";
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -50,6 +52,7 @@ const Dashboard = () => {
   const { metrics: spfMetrics } = useSPFHealthMetrics();
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const { activeGmailConfig, isAnySyncing, configs } = useEmailSync();
 
   // Fetch available domains
   useEffect(() => {
@@ -179,6 +182,15 @@ const Dashboard = () => {
               Manage Reports
             </Button>
           </Link>
+          
+          {/* Gmail Integration */}
+          <Link to="/settings">
+            <Button variant="outline" className="bg-blue-50 hover:bg-blue-100 border-blue-200">
+              <Mail className="w-4 h-4 mr-2" />
+              Gmail Sync
+            </Button>
+          </Link>
+
           <Link to="/upload">
             <Button className="bg-blue-600 hover:bg-blue-700">
               <UploadIcon className="w-4 h-4 mr-2" />
