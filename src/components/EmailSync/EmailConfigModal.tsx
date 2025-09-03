@@ -53,15 +53,24 @@ export function EmailConfigModal({
   const loadConfigs = useCallback(async () => {
     if (!user) return;
     
+    // Check if Gmail is configured first
+    if (!gmailAuthService.isGmailConfigured()) {
+      console.warn('Gmail integration not configured, skipping config load');
+      setConfigs([]);
+      setLoading(false);
+      return;
+    }
+    
     try {
       setLoading(true);
       const userConfigs = await gmailAuthService.getUserEmailConfigs(user.id);
       setConfigs(userConfigs);
     } catch (error) {
       console.error('Error loading email configs:', error);
+      // Only show error toast for actual database/network errors, not configuration issues
       toast({
         title: 'Error Loading Configurations',
-        description: 'Failed to load email configurations',
+        description: 'Failed to load email configurations. Please try again.',
         variant: 'destructive'
       });
     } finally {
@@ -215,50 +224,73 @@ export function EmailConfigModal({
               <CardTitle className="text-lg">Connect New Email Account</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col sm:flex-row gap-4 items-start">
-                <div className="flex-1">
-                  <p className="text-sm text-gray-600 mb-4">
-                    Connect your Gmail account to automatically fetch DMARC reports. 
-                    We'll search for emails with DMARC report attachments and process them automatically.
+              {gmailAuthService.isGmailConfigured() ? (
+                <div className="flex flex-col sm:flex-row gap-4 items-start">
+                  <div className="flex-1">
+                    <p className="text-sm text-gray-600 mb-4">
+                      Connect your Gmail account to automatically fetch DMARC reports. 
+                      We'll search for emails with DMARC report attachments and process them automatically.
+                    </p>
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Shield className="w-4 h-4" />
+                      <span>Read-only access to your Gmail account</span>
+                    </div>
+                  </div>
+                  <GmailOAuthButton
+                    onConfigAdded={handleConfigAdded}
+                    onConfigUpdated={handleConfigsUpdated}
+                    existingConfigs={configs}
+                    showStatus={false}
+                  />
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <AlertCircle className="w-12 h-12 mx-auto text-amber-500 mb-4" />
+                  <h3 className="text-lg font-semibold text-amber-900 mb-2">
+                    Gmail Integration Not Configured
+                  </h3>
+                  <p className="text-amber-700 mb-4 max-w-2xl mx-auto">
+                    Gmail integration requires additional setup. The <code className="bg-amber-200 px-1 rounded">VITE_GOOGLE_CLIENT_ID</code> environment variable is missing.
                   </p>
-                  <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <Shield className="w-4 h-4" />
-                    <span>Read-only access to your Gmail account</span>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left max-w-lg mx-auto">
+                    <h4 className="font-semibold text-amber-900 mb-2">Setup Required:</h4>
+                    <ol className="text-sm text-amber-800 space-y-1 list-decimal list-inside">
+                      <li>Create a Google Cloud Console project</li>
+                      <li>Enable the Gmail API</li>
+                      <li>Create OAuth 2.0 credentials</li>
+                      <li>Set the <code className="bg-amber-200 px-1 rounded">VITE_GOOGLE_CLIENT_ID</code> environment variable</li>
+                    </ol>
                   </div>
                 </div>
-                <GmailOAuthButton
-                  onConfigAdded={handleConfigAdded}
-                  onConfigUpdated={handleConfigsUpdated}
-                  existingConfigs={configs}
-                  showStatus={false}
-                />
-              </div>
+              )}
             </CardContent>
           </Card>
 
           {/* Existing Configurations */}
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader className="w-6 h-6 animate-spin" />
-              <span className="ml-2">Loading configurations...</span>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Connected Accounts ({configs.length})</h3>
-              
-              {configs.length === 0 ? (
-                <Card>
-                  <CardContent className="py-8 text-center">
-                    <Mail className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600 mb-2">No email accounts connected</p>
-                    <p className="text-sm text-gray-500">
-                      Connect your Gmail account above to start syncing DMARC reports automatically.
-                    </p>
-                  </CardContent>
-                </Card>
+          {gmailAuthService.isGmailConfigured() && (
+            <>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader className="w-6 h-6 animate-spin" />
+                  <span className="ml-2">Loading configurations...</span>
+                </div>
               ) : (
-                <div className="grid gap-4">
-                  {configs.map((config) => (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Connected Accounts ({configs.length})</h3>
+                  
+                  {configs.length === 0 ? (
+                    <Card>
+                      <CardContent className="py-8 text-center">
+                        <Mail className="w-12 h-12 mx-auto text-gray-400 mb-4" />
+                        <p className="text-gray-600 mb-2">No email accounts connected</p>
+                        <p className="text-sm text-gray-500">
+                          Connect your Gmail account above to start syncing DMARC reports automatically.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="grid gap-4">
+                      {configs.map((config) => (
                     <Card key={config.id}>
                       <CardHeader>
                         <CardTitle className="flex items-center justify-between">
@@ -353,7 +385,9 @@ export function EmailConfigModal({
                   ))}
                 </div>
               )}
-            </div>
+                </div>
+              )}
+            </>
           )}
 
           {/* Information Section */}

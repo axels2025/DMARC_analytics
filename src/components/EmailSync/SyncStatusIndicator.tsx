@@ -79,9 +79,13 @@ export function SyncStatusIndicator({
           variant: 'default'
         });
       } else {
+        const errorMessage = result.errors.length > 0 
+          ? result.errors.join('; ')
+          : 'Sync failed for unknown reasons. Please check your Gmail connection.';
+        
         toast({
           title: 'Sync Failed',
-          description: result.errors.join('; '),
+          description: errorMessage,
           variant: 'destructive'
         });
       }
@@ -91,9 +95,13 @@ export function SyncStatusIndicator({
       onSyncComplete?.();
 
     } catch (error) {
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : 'An unexpected error occurred during sync. Please try again.';
+      
       toast({
         title: 'Sync Error',
-        description: error instanceof Error ? error.message : 'Unknown error',
+        description: errorMessage,
         variant: 'destructive'
       });
     } finally {
@@ -266,7 +274,10 @@ export function SyncStatusIndicator({
               <div className="text-sm text-red-800">
                 <p className="font-medium">Sync Error</p>
                 <p className="text-red-700 mt-1">
-                  Check your Gmail connection or try reconnecting your account.
+                  {config.last_error_message || "There was an issue syncing your Gmail account. Try clicking 'Sync Now' to retry, or disconnect and reconnect your account if the problem persists."}
+                </p>
+                <p className="text-red-600 text-xs mt-2">
+                  <strong>Next steps:</strong> Click 'Sync Now' to retry, or use 'Test' to check your connection.
                 </p>
               </div>
             </div>

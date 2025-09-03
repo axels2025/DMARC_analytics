@@ -227,7 +227,7 @@ const Settings = () => {
         </div>
       )}
 
-      {configs.length === 0 && (
+      {configs.length === 0 && configurationStatus?.configured && (
         <Card>
           <CardContent className="py-8 text-center">
             <Mail className="w-12 h-12 mx-auto text-gray-400 mb-4" />
