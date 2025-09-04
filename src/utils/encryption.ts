@@ -64,6 +64,22 @@ export async function encryptToken(token: string): Promise<string> {
 // Decrypt sensitive data
 export async function decryptToken(encryptedToken: string): Promise<string> {
   try {
+    console.log('[decryptToken] Starting token decryption');
+    
+    if (!encryptedToken) {
+      throw new Error('Empty encrypted token provided');
+    }
+    
+    // Check if encryption is supported
+    if (!isEncryptionSupported()) {
+      throw new Error('Web Crypto API not available');
+    }
+    
+    // Get current encryption password
+    const currentPassword = getEncryptionPassword();
+    console.log('[decryptToken] Current encryption key exists:', !!currentPassword);
+    console.log('[decryptToken] Encryption key length:', currentPassword.length);
+    
     // Decode from base64
     const combined = new Uint8Array(
       atob(encryptedToken)
@@ -71,10 +87,19 @@ export async function decryptToken(encryptedToken: string): Promise<string> {
         .map(char => char.charCodeAt(0))
     );
     
+    console.log('[decryptToken] Base64 decoded successfully, length:', combined.length);
+    
+    if (combined.length < IV_LENGTH) {
+      throw new Error(`Invalid encrypted token: too short (${combined.length} bytes, expected at least ${IV_LENGTH})`);
+    }
+    
     const iv = combined.slice(0, IV_LENGTH);
     const encryptedData = combined.slice(IV_LENGTH);
     
-    const key = await deriveKey(getEncryptionPassword());
+    console.log('[decryptToken] IV length:', iv.length, 'Encrypted data length:', encryptedData.length);
+    
+    const key = await deriveKey(currentPassword);
+    console.log('[decryptToken] Encryption key derived successfully');
     
     const decryptedData = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },
@@ -83,9 +108,26 @@ export async function decryptToken(encryptedToken: string): Promise<string> {
     );
     
     const decoder = new TextDecoder();
-    return decoder.decode(decryptedData);
+    const result = decoder.decode(decryptedData);
+    
+    console.log('[decryptToken] Decryption successful, result length:', result.length);
+    return result;
+    
   } catch (error) {
-    console.error('Decryption failed:', error);
+    console.error('[decryptToken] Decryption failed:', error);
+    console.error('[decryptToken] Error type:', error.constructor.name);
+    console.error('[decryptToken] Error message:', error instanceof Error ? error.message : 'Unknown error');
+    
+    // Log localStorage encryption key status for debugging
+    const storedKey = localStorage.getItem('dmarc_encryption_key');
+    console.error('[decryptToken] Stored encryption key exists:', !!storedKey);
+    
+    if (error instanceof DOMException) {
+      if (error.name === 'OperationError') {
+        throw new Error('Token decryption failed - likely due to wrong encryption key. Please re-authenticate.');
+      }
+    }
+    
     throw new Error('Failed to decrypt token');
   }
 }
@@ -94,4 +136,24 @@ export async function decryptToken(encryptedToken: string): Promise<string> {
 export function isEncryptionSupported(): boolean {
   return typeof crypto !== 'undefined' && 
          typeof crypto.subtle !== 'undefined';
+}
+
+// Clear the stored encryption key (forces re-authentication)
+export function clearEncryptionKey(): void {
+  console.log('[clearEncryptionKey] Clearing stored encryption key');
+  localStorage.removeItem('dmarc_encryption_key');
+}
+
+// Get encryption key status for debugging
+export function getEncryptionKeyStatus(): {
+  hasKey: boolean;
+  keyLength: number;
+  keyPreview: string;
+} {
+  const key = localStorage.getItem('dmarc_encryption_key');
+  return {
+    hasKey: !!key,
+    keyLength: key ? key.length : 0,
+    keyPreview: key ? key.substring(0, 8) + '...' : 'none'
+  };
 }

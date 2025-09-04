@@ -2,6 +2,9 @@ import { gmailAuthService, GmailAuthCredentials } from './gmailAuth';
 import * as pako from 'pako';
 import JSZip from 'jszip';
 
+// VERSION IDENTIFIER - Updated 2024-09-04 - Full Gzip Support Implementation
+console.log('[gmailService] Loading version 2024-09-04-gzip-support');
+
 export interface GmailMessage {
   id: string;
   threadId: string;
@@ -220,6 +223,8 @@ class GmailService {
   private isDmarcFile(filename: string): boolean {
     const lowerFilename = filename.toLowerCase();
     
+    console.log(`[isDmarcFile] Checking filename: ${lowerFilename}`);
+    
     // Check for DMARC-related patterns in filename
     const dmarcPatterns = [
       'dmarc',
@@ -229,11 +234,28 @@ class GmailService {
       '.gz'
     ];
 
-    return dmarcPatterns.some(pattern => lowerFilename.includes(pattern)) ||
-           // Common DMARC report filename patterns
-           /^[\w\.-]+![\w\.-]+!\d+!\d+\.xml/.test(lowerFilename) ||
-           /dmarc.*\.xml$/.test(lowerFilename) ||
-           /report.*domain.*\.xml$/.test(lowerFilename);
+    const hasPattern = dmarcPatterns.some(pattern => lowerFilename.includes(pattern));
+    
+    // Common DMARC report filename patterns
+    const isStandardFormat = /^[\w\.-]+![\w\.-]+!\d+!\d+\.xml/.test(lowerFilename); // Standard format
+    const isCompressedFormat = /^[\w\.-]+![\w\.-]+!\d+!\d+\.xml\.(gz|gzip)$/.test(lowerFilename); // Compressed format
+    const isOutlookFormat = /outlook\.com!.*!\d+!\d+\.xml(\.gz)?$/.test(lowerFilename); // Microsoft Outlook format
+    const isDmarcNamed = /dmarc.*\.xml(\.gz|\.zip)?$/.test(lowerFilename);
+    const isReportNamed = /report.*domain.*\.xml(\.gz|\.zip)?$/.test(lowerFilename);
+    
+    const result = hasPattern || isStandardFormat || isCompressedFormat || isOutlookFormat || isDmarcNamed || isReportNamed;
+    
+    console.log(`[isDmarcFile] Analysis for ${lowerFilename}:`, {
+      hasPattern,
+      isStandardFormat,
+      isCompressedFormat,
+      isOutlookFormat,
+      isDmarcNamed,
+      isReportNamed,
+      finalResult: result
+    });
+    
+    return result;
   }
 
   // Helper method to properly decode URL-safe base64 to Uint8Array
@@ -293,60 +315,119 @@ class GmailService {
     console.log(`XML validation passed for ${filename}: ${content.length} characters, starts with: ${content.substring(0, 50)}...`);
   }
 
+  // FAILSAFE: Catch any "Compressed files not yet supported" errors from cached/old code
+  private handleLegacyCompressionError(filename: string, data: string): string[] {
+    console.warn(`[handleLegacyCompressionError] Intercepted legacy compression error for ${filename}`);
+    console.log(`[handleLegacyCompressionError] Attempting direct gzip decompression as fallback`);
+    
+    try {
+      // Try URL-safe base64 decoding
+      const uint8Array = this.base64ToUint8Array(data);
+      
+      if (filename.toLowerCase().endsWith('.gz') || filename.toLowerCase().endsWith('.gzip')) {
+        const decompressed = pako.inflate(uint8Array, { to: 'string' });
+        console.log(`[handleLegacyCompressionError] Fallback gzip decompression successful: ${decompressed.length} characters`);
+        return [decompressed];
+      }
+      
+      throw new Error('Fallback decompression failed - not a gzip file');
+    } catch (error) {
+      console.error(`[handleLegacyCompressionError] Fallback decompression failed:`, error);
+      throw new Error(`Legacy compression handling failed for ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // Detect actual file type based on content signature
+  private detectFileTypeFromContent(uint8Array: Uint8Array, filename: string): 'zip' | 'gzip' | 'xml' | 'unknown' {
+    if (uint8Array.length < 4) {
+      console.log(`[detectFileTypeFromContent] File too small to detect type: ${uint8Array.length} bytes`);
+      return 'unknown';
+    }
+    
+    // Check for ZIP signature: "PK" (0x50 0x4B)
+    if (uint8Array[0] === 0x50 && uint8Array[1] === 0x4B) {
+      console.log(`[detectFileTypeFromContent] Detected ZIP file by signature (PK) for ${filename}`);
+      return 'zip';
+    }
+    
+    // Check for gzip signature: 0x1F 0x8B
+    if (uint8Array[0] === 0x1F && uint8Array[1] === 0x8B) {
+      console.log(`[detectFileTypeFromContent] Detected GZIP file by signature for ${filename}`);
+      return 'gzip';
+    }
+    
+    // Check if it starts with XML-like content
+    const textDecoder = new TextDecoder('utf-8', { fatal: false });
+    const preview = textDecoder.decode(uint8Array.slice(0, 100));
+    if (preview.trim().startsWith('<')) {
+      console.log(`[detectFileTypeFromContent] Detected XML file by content for ${filename}`);
+      return 'xml';
+    }
+    
+    console.log(`[detectFileTypeFromContent] Unknown file type for ${filename}, content preview:`, preview.substring(0, 50));
+    return 'unknown';
+  }
+
   // Decompress attachment data if needed - returns array of XML content strings
   async decompressAttachment(attachment: DmarcAttachment): Promise<string[]> {
     const filename = attachment.filename.toLowerCase();
     
     try {
-      console.log(`Processing attachment: ${filename}, base64 length: ${attachment.data.length}`);
+      console.log(`[decompressAttachment] VERSION CHECK: 2024-09-04-gzip-support active`);
+      console.log(`[decompressAttachment] Processing attachment: ${filename}, base64 length: ${attachment.data.length}`);
       
-      // Decode base64 using proper URL-safe decoding
+      // Decode base64 using proper URL-safe decoding FIRST
       const uint8Array = this.base64ToUint8Array(attachment.data);
-      console.log(`Decoded ${uint8Array.length} bytes from base64 for ${filename}`);
+      console.log(`[decompressAttachment] Decoded ${uint8Array.length} bytes from base64 for ${filename}`);
       
-      // Handle raw XML files
-      if (filename.endsWith('.xml')) {
-        const textDecoder = new TextDecoder('utf-8');
-        const xmlContent = textDecoder.decode(uint8Array);
-        console.log(`Raw XML file ${filename}: ${xmlContent.length} characters`);
-        this.validateXmlContent(xmlContent, filename);
-        return [xmlContent];
-      }
+      // SMART FILE TYPE DETECTION: Check actual content, not just filename
+      const actualFileType = this.detectFileTypeFromContent(uint8Array, filename);
+      const filenameBasedType = filename.endsWith('.gz') || filename.endsWith('.gzip') ? 'gzip' :
+                                filename.endsWith('.zip') ? 'zip' :
+                                filename.endsWith('.xml') ? 'xml' : 'unknown';
       
-      // Handle gzip compressed files
-      if (filename.endsWith('.gz') || filename.endsWith('.gzip')) {
+      console.log(`[decompressAttachment] File type analysis for ${filename}:`);
+      console.log(`[decompressAttachment] - Filename suggests: ${filenameBasedType}`);
+      console.log(`[decompressAttachment] - Content signature suggests: ${actualFileType}`);
+      
+      // Use content-based detection if it conflicts with filename
+      const finalFileType = actualFileType !== 'unknown' ? actualFileType : filenameBasedType;
+      console.log(`[decompressAttachment] - Final decision: ${finalFileType}`);
+      
+      // FAILSAFE CHECK: If this is a .gz file and we somehow got here, force gzip handling
+      if ((filename.endsWith('.gz') || filename.endsWith('.gzip') || finalFileType === 'gzip') && attachment.data) {
+        console.log(`[decompressAttachment] Processing as GZIP file`);
         try {
-          console.log(`Decompressing gzip file ${filename}...`);
           const decompressed = pako.inflate(uint8Array, { to: 'string' });
-          console.log(`Gzip decompression successful: ${decompressed.length} characters`);
+          console.log(`[decompressAttachment] Gzip decompression successful: ${decompressed.length} characters`);
           this.validateXmlContent(decompressed, filename);
           return [decompressed];
         } catch (error) {
-          console.error(`Gzip decompression failed for ${filename}:`, error);
-          throw new Error(`Failed to decompress gzip file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          console.error(`[decompressAttachment] Gzip decompression failed:`, error);
+          throw new Error(`Gzip decompression failed for ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
       
-      // Handle ZIP archives
-      if (filename.endsWith('.zip')) {
+      // Handle ZIP files (including those misnamed as .xml)
+      if (filename.endsWith('.zip') || finalFileType === 'zip') {
+        console.log(`[decompressAttachment] Processing as ZIP archive`);
         try {
-          console.log(`Loading ZIP archive ${filename}...`);
           const zip = await JSZip.loadAsync(uint8Array);
           const xmlFiles: string[] = [];
           
-          console.log(`ZIP archive contains ${Object.keys(zip.files).length} files`);
+          console.log(`[decompressAttachment] ZIP archive contains ${Object.keys(zip.files).length} files`);
           
           // Extract all XML files from the zip
           for (const [entryFilename, file] of Object.entries(zip.files)) {
             if (!file.dir && entryFilename.toLowerCase().endsWith('.xml')) {
               try {
-                console.log(`Extracting XML file: ${entryFilename}`);
+                console.log(`[decompressAttachment] Extracting XML file: ${entryFilename}`);
                 const content = await file.async('string');
-                console.log(`Extracted ${content.length} characters from ${entryFilename}`);
+                console.log(`[decompressAttachment] Extracted ${content.length} characters from ${entryFilename}`);
                 this.validateXmlContent(content, entryFilename);
                 xmlFiles.push(content);
               } catch (error) {
-                console.warn(`Failed to extract ${entryFilename} from ZIP:`, error);
+                console.warn(`[decompressAttachment] Failed to extract ${entryFilename} from ZIP:`, error);
               }
             }
           }
@@ -356,18 +437,30 @@ class GmailService {
             throw new Error(`No XML files found in ZIP archive ${filename}. Found files: ${allFiles}`);
           }
           
-          console.log(`Successfully extracted ${xmlFiles.length} XML files from ${filename}`);
+          console.log(`[decompressAttachment] Successfully extracted ${xmlFiles.length} XML files from ${filename}`);
           return xmlFiles;
         } catch (error) {
-          console.error(`ZIP processing failed for ${filename}:`, error);
+          console.error(`[decompressAttachment] ZIP processing failed for ${filename}:`, error);
           throw new Error(`Failed to decompress ZIP file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
       
+      // Handle raw XML files (fallback for content-detected XML or files that passed content detection)
+      if (filename.endsWith('.xml') || finalFileType === 'xml') {
+        console.log(`[decompressAttachment] Processing as raw XML file`);
+        const textDecoder = new TextDecoder('utf-8');
+        const xmlContent = textDecoder.decode(uint8Array);
+        console.log(`[decompressAttachment] Raw XML file ${filename}: ${xmlContent.length} characters`);
+        this.validateXmlContent(xmlContent, filename);
+        return [xmlContent];
+      }
+      
+      console.error(`[decompressAttachment] Unsupported file format detected: ${filename}`);
+      console.error(`[decompressAttachment] File extension analysis: ${filename.substring(filename.lastIndexOf('.'))}`);
       throw new Error(`Unsupported file format: ${filename}. Supported formats: .xml, .gz, .gzip, .zip`);
     } catch (error) {
-      console.error(`Error decompressing attachment ${filename}:`, error);
-      console.error(`Attachment data preview:`, attachment.data.substring(0, 100) + '...');
+      console.error(`[decompressAttachment] Error processing attachment ${filename}:`, error);
+      console.error(`[decompressAttachment] Attachment data preview:`, attachment.data.substring(0, 100) + '...');
       throw error;
     }
   }

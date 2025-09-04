@@ -287,18 +287,32 @@ export async function checkDuplicateReport(
   reportId: string, 
   userId: string
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('dmarc_reports')
-    .select('id')
-    .eq('report_id', reportId)
-    .eq('user_id', userId)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from('dmarc_reports')
+      .select('id')
+      .eq('report_id', reportId)
+      .eq('user_id', userId)
+      .maybeSingle();
 
-  if (error) {
-    throw new Error(`Duplicate check failed: ${error.message}`);
+    if (error) {
+      // Log the specific error but don't throw - this prevents processing from stopping
+      console.warn(`[checkDuplicateReport] Warning - duplicate check failed for report ${reportId}: ${error.message}`);
+      
+      // For 406 errors, likely URL encoding issues, return false to continue processing
+      if (error.message.includes('406') || error.message.includes('Not Acceptable')) {
+        console.warn(`[checkDuplicateReport] 406 error detected - continuing with processing (may be duplicate but database constraints will prevent actual duplicate)`);
+        return false;
+      }
+      
+      throw new Error(`Duplicate check failed: ${error.message}`);
+    }
+
+    return !!data;
+  } catch (error) {
+    console.error(`[checkDuplicateReport] Unexpected error checking duplicate for report ${reportId}:`, error);
+    throw error;
   }
-
-  return !!data;
 }
 
 export async function deleteDmarcReport(

@@ -277,9 +277,31 @@ class GmailAuthService {
     }
   }
 
-  // Get decrypted credentials for a config with automatic token refresh
+  // Clean up corrupted credentials that can't be decrypted
+  async cleanupCorruptedCredentials(configId: string, reason: string): Promise<void> {
+    console.warn(`[cleanupCorruptedCredentials] Removing corrupted config ${configId}: ${reason}`);
+    
+    try {
+      const { error } = await supabase
+        .from('user_email_configs')
+        .delete()
+        .eq('id', configId);
+        
+      if (error) {
+        console.error('[cleanupCorruptedCredentials] Failed to delete corrupted config:', error);
+      } else {
+        console.log('[cleanupCorruptedCredentials] Successfully removed corrupted config');
+      }
+    } catch (error) {
+      console.error('[cleanupCorruptedCredentials] Error during cleanup:', error);
+    }
+  }
+
+  // Get decrypted credentials for a config with automatic token refresh and corruption handling
   async getCredentials(configId: string, userId: string): Promise<GmailAuthCredentials | null> {
     try {
+      console.log(`[getCredentials] Fetching credentials for config: ${configId}, user: ${userId}`);
+      
       const { data, error } = await supabase
         .from('user_email_configs')
         .select('email_address, access_token, refresh_token, expires_at')
@@ -288,18 +310,54 @@ class GmailAuthService {
         .single();
 
       if (error || !data) {
-        console.log('No credentials found for config:', configId);
+        console.log('[getCredentials] No credentials found for config:', configId);
         return null;
+      }
+
+      console.log(`[getCredentials] Found credentials for ${data.email_address}`);
+
+      // Try to decrypt tokens with comprehensive error handling
+      let access_token: string;
+      let refresh_token: string | undefined;
+
+      try {
+        console.log('[getCredentials] Attempting to decrypt access token...');
+        access_token = await decryptToken(data.access_token);
+        console.log('[getCredentials] Access token decrypted successfully');
+      } catch (decryptError) {
+        console.error('[getCredentials] Failed to decrypt access token:', decryptError);
+        
+        // If decryption fails, the tokens are corrupted and unusable
+        await this.cleanupCorruptedCredentials(
+          configId, 
+          `Access token decryption failed: ${decryptError instanceof Error ? decryptError.message : 'Unknown error'}`
+        );
+        
+        return null; // This will trigger re-authentication
+      }
+
+      if (data.refresh_token) {
+        try {
+          console.log('[getCredentials] Attempting to decrypt refresh token...');
+          refresh_token = await decryptToken(data.refresh_token);
+          console.log('[getCredentials] Refresh token decrypted successfully');
+        } catch (decryptError) {
+          console.error('[getCredentials] Failed to decrypt refresh token:', decryptError);
+          
+          // If refresh token fails but access token works, we can continue with limited functionality
+          console.warn('[getCredentials] Continuing without refresh token (will need re-auth when access token expires)');
+          refresh_token = undefined;
+        }
       }
 
       const credentials: GmailAuthCredentials = {
         email: data.email_address,
-        access_token: await decryptToken(data.access_token),
+        access_token,
         expires_at: data.expires_at ? new Date(data.expires_at) : undefined
       };
 
-      if (data.refresh_token) {
-        credentials.refresh_token = await decryptToken(data.refresh_token);
+      if (refresh_token) {
+        credentials.refresh_token = refresh_token;
       }
 
       // Check if token is expired or will expire soon (5 minutes buffer)

@@ -4,6 +4,9 @@ import { parseDmarcXml } from '@/utils/dmarcParser';
 import { saveDmarcReport } from '@/utils/dmarcDatabase';
 import { supabase } from '@/integrations/supabase/client';
 
+// VERSION IDENTIFIER - Updated 2024-09-04 - Gzip Error Fallback
+console.log('[emailProcessor] Loading version 2024-09-04-gzip-fallback');
+
 export interface SyncProgress {
   phase: 'searching' | 'downloading' | 'processing' | 'completed' | 'error';
   message: string;
@@ -48,10 +51,11 @@ class EmailProcessor {
         message: 'Getting Gmail credentials...'
       });
 
-      // Get credentials (this now handles automatic token refresh)
+      // Get credentials (this now handles automatic token refresh and corruption recovery)
       const credentials = await gmailAuthService.getCredentials(configId, userId);
       if (!credentials) {
-        throw new Error('Gmail credentials not found or expired. Please reconnect your account.');
+        console.warn('[syncDmarcReports] No valid credentials found - likely need re-authentication');
+        throw new Error('Gmail authentication required. Please reconnect your Gmail account to continue syncing.');
       }
 
       console.log('Gmail credentials obtained:', {
@@ -167,9 +171,18 @@ class EmailProcessor {
       // Update config status
       await gmailAuthService.updateSyncStatus(configId, 'error', errorMessage);
 
-      const finalErrorMessage = (errorMessage.includes('401') || errorMessage.includes('Unauthorized'))
-        ? 'Gmail authentication expired. Please reconnect your account.'
-        : errorMessage;
+      // Provide user-friendly error messages based on error type
+      let finalErrorMessage = errorMessage;
+      
+      if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+        finalErrorMessage = 'Gmail authentication expired. Please reconnect your account.';
+      } else if (errorMessage.includes('Failed to decrypt token') || errorMessage.includes('decryption failed')) {
+        finalErrorMessage = 'Gmail authentication corrupted. Please reconnect your Gmail account.';
+      } else if (errorMessage.includes('Gmail authentication required')) {
+        finalErrorMessage = errorMessage; // Already user-friendly
+      } else {
+        finalErrorMessage = errorMessage;
+      }
 
       onProgress?.({
         phase: 'error',
@@ -249,7 +262,52 @@ class EmailProcessor {
   ): Promise<'processed' | 'skipped' | 'error'> {
     try {
       // Decompress attachment - returns array of XML content strings
-      const xmlContents = await gmailService.decompressAttachment(attachment);
+      console.log(`[processSingleAttachment] Processing attachment: ${attachment.filename}`);
+      console.log(`[processSingleAttachment] Calling gmailService.decompressAttachment for ${attachment.filename}`);
+      
+      let xmlContents: string[];
+      
+      try {
+        xmlContents = await gmailService.decompressAttachment(attachment);
+      } catch (error) {
+        // FAILSAFE: Catch the "Compressed files not yet supported" error from cached code
+        if (error instanceof Error && error.message.includes('Compressed files not yet supported')) {
+          console.warn(`[processSingleAttachment] Detected legacy "Compressed files not yet supported" error for ${attachment.filename}`);
+          console.log(`[processSingleAttachment] Attempting direct fallback gzip decompression...`);
+          
+          // Try direct gzip decompression as fallback
+          if (attachment.filename.toLowerCase().endsWith('.gz') || attachment.filename.toLowerCase().endsWith('.gzip')) {
+            try {
+              // Import pako locally for fallback
+              const pako = await import('pako');
+              
+              // Basic base64 to Uint8Array conversion for fallback
+              const base64Data = attachment.data.replace(/-/g, '+').replace(/_/g, '/');
+              const padding = base64Data.length % 4;
+              const paddedBase64 = padding > 0 ? base64Data + '='.repeat(4 - padding) : base64Data;
+              
+              const binaryString = atob(paddedBase64);
+              const uint8Array = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                uint8Array[i] = binaryString.charCodeAt(i);
+              }
+              
+              const decompressed = pako.inflate(uint8Array, { to: 'string' });
+              console.log(`[processSingleAttachment] Fallback gzip decompression successful: ${decompressed.length} characters`);
+              xmlContents = [decompressed];
+            } catch (fallbackError) {
+              console.error(`[processSingleAttachment] Fallback gzip decompression failed:`, fallbackError);
+              throw new Error(`Both primary and fallback decompression failed for ${attachment.filename}: ${error.message}`);
+            }
+          } else {
+            throw error; // Re-throw if not a gzip file
+          }
+        } else {
+          throw error; // Re-throw other errors
+        }
+      }
+      
+      console.log(`[processSingleAttachment] Successfully decompressed ${attachment.filename}, got ${xmlContents.length} XML content(s)`);
       
       let processedCount = 0;
       let skippedCount = 0;
@@ -306,25 +364,49 @@ class EmailProcessor {
     userId: string
   ): Promise<'processed' | 'skipped'> {
     try {
+      console.log(`[processSingleReport] Processing ${xmlFilename}, XML content length: ${xmlContent.length} chars`);
+      console.log(`[processSingleReport] XML preview: ${xmlContent.substring(0, 200)}...`);
+      
       // Parse DMARC XML
       const dmarcReport = await parseDmarcXml(xmlContent);
       
+      // Validate that parsing was successful and we have required fields
+      if (!dmarcReport || !dmarcReport.reportMetadata || !dmarcReport.reportMetadata.reportId) {
+        throw new Error('Invalid parsing result: missing report metadata or report ID');
+      }
+      
+      console.log(`[processSingleReport] Successfully parsed report with ID: ${dmarcReport.reportMetadata.reportId}`);
+      console.log(`[processSingleReport] Report org: ${dmarcReport.reportMetadata.orgName}`);
+      
+      // Validate report ID format (should not contain XML content)
+      if (dmarcReport.reportMetadata.reportId.includes('<') || dmarcReport.reportMetadata.reportId.includes('>')) {
+        throw new Error(`Invalid report ID format: contains XML characters: ${dmarcReport.reportMetadata.reportId.substring(0, 100)}`);
+      }
+      
       // Check if report already exists to avoid duplicates
-      const { data: existingReport } = await supabase
-        .from('dmarc_reports')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('report_id', dmarcReport.reportMetadata.reportId)
-        .eq('org_name', dmarcReport.reportMetadata.orgName)
-        .single();
+      try {
+        const { data: existingReport, error: duplicateError } = await supabase
+          .from('dmarc_reports')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('report_id', dmarcReport.reportMetadata.reportId)
+          .eq('org_name', dmarcReport.reportMetadata.orgName)
+          .maybeSingle(); // Use maybeSingle instead of single to avoid errors when no results
 
-      if (existingReport) {
-        console.log(`Skipping duplicate report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
-        return 'skipped';
+        if (duplicateError) {
+          console.warn(`[processSingleReport] Duplicate check failed for ${dmarcReport.reportMetadata.reportId}: ${duplicateError.message}`);
+          // Continue processing - the database-level duplicate check will catch this if needed
+        } else if (existingReport) {
+          console.log(`Skipping duplicate report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
+          return 'skipped';
+        }
+      } catch (duplicateCheckError) {
+        console.warn(`[processSingleReport] Duplicate check error for ${dmarcReport.reportMetadata.reportId}:`, duplicateCheckError);
+        // Continue processing - the database-level duplicate check will catch this if needed
       }
 
       // Save to database
-      await saveDmarcReport(dmarcReport, userId, xmlContent);
+      await saveDmarcReport(dmarcReport, xmlContent, userId);
       
       console.log(`Successfully processed DMARC report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
       return 'processed';
