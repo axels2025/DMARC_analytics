@@ -190,6 +190,12 @@ class EmailProcessor {
         const errorMsg = `Error processing ${attachment.filename}: ${error instanceof Error ? error.message : 'Unknown error'}`;
         errors.push(errorMsg);
         console.error(errorMsg, error);
+        
+        // Log additional details for XML parser errors specifically
+        if (error instanceof Error && error.message.includes('XML parser error')) {
+          console.error(`XML parsing failed for ${attachment.filename}. This is likely due to corrupted base64 decoding.`);
+          console.error(`Attachment size: ${attachment.data.length} characters`);
+        }
       }
 
       // Small delay to prevent overwhelming the system
@@ -232,6 +238,11 @@ class EmailProcessor {
           const errorMsg = `Error processing XML ${i + 1} from ${attachment.filename}: ${error instanceof Error ? error.message : 'Unknown error'}`;
           errors.push(errorMsg);
           console.error(errorMsg, error);
+          
+          // Log XML content preview for debugging
+          if (xmlContent && typeof xmlContent === 'string') {
+            console.error(`XML content preview (first 200 chars): ${xmlContent.substring(0, 200)}...`);
+          }
         }
       }
 
