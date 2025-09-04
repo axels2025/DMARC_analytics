@@ -30,7 +30,8 @@ class EmailProcessor {
   async syncDmarcReports(
     configId: string,
     userId: string,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    isRetry: boolean = false
   ): Promise<SyncResult> {
     const startTime = Date.now();
     let syncLogId: string | null = null;
@@ -47,11 +48,18 @@ class EmailProcessor {
         message: 'Getting Gmail credentials...'
       });
 
-      // Get credentials
+      // Get credentials (this now handles automatic token refresh)
       const credentials = await gmailAuthService.getCredentials(configId, userId);
       if (!credentials) {
-        throw new Error('Failed to get Gmail credentials');
+        throw new Error('Gmail credentials not found or expired. Please reconnect your account.');
       }
+
+      console.log('Gmail credentials obtained:', {
+        has_access_token: !!credentials.access_token,
+        has_refresh_token: !!credentials.refresh_token,
+        expires_at: credentials.expires_at,
+        email: credentials.email
+      });
 
       onProgress?.({
         phase: 'searching',
@@ -124,6 +132,29 @@ class EmailProcessor {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       
+      // Handle 401 Unauthorized errors with token refresh retry
+      if ((errorMessage.includes('401') || errorMessage.includes('Unauthorized')) && !isRetry) {
+        console.log('Received 401 error, attempting to refresh token and retry...');
+        
+        onProgress?.({
+          phase: 'searching',
+          message: 'Authentication expired, refreshing credentials...'
+        });
+
+        try {
+          const refreshedCredentials = await gmailAuthService.refreshTokenForConfig(configId, userId);
+          if (refreshedCredentials) {
+            console.log('Token refreshed successfully, retrying sync...');
+            // Retry the sync once with new token
+            return await this.syncDmarcReports(configId, userId, onProgress, true);
+          } else {
+            console.log('Token refresh failed - user needs to re-authenticate');
+          }
+        } catch (refreshError) {
+          console.error('Token refresh attempt failed:', refreshError);
+        }
+      }
+      
       // Update sync log with error
       if (syncLogId) {
         await this.updateSyncLog(syncLogId, {
@@ -136,9 +167,13 @@ class EmailProcessor {
       // Update config status
       await gmailAuthService.updateSyncStatus(configId, 'error', errorMessage);
 
+      const finalErrorMessage = (errorMessage.includes('401') || errorMessage.includes('Unauthorized'))
+        ? 'Gmail authentication expired. Please reconnect your account.'
+        : errorMessage;
+
       onProgress?.({
         phase: 'error',
-        message: `Sync failed: ${errorMessage}`
+        message: `Sync failed: ${finalErrorMessage}`
       });
 
       return {
@@ -146,7 +181,7 @@ class EmailProcessor {
         emailsFetched: 0,
         reportsProcessed: 0,
         reportsSkipped: 0,
-        errors: [errorMessage],
+        errors: [finalErrorMessage],
         duration: Date.now() - startTime
       };
     }

@@ -78,6 +78,9 @@ class GmailAuthService {
       client_id: this.clientId!,
       scope: GMAIL_SCOPES.join(' '),
       callback: '', // Will be set dynamically
+      // Request offline access to get refresh tokens
+      access_type: 'offline',
+      prompt: 'consent', // Force consent screen to get refresh token
     });
   }
 
@@ -103,9 +106,16 @@ class GmailAuthService {
             
             const credentials: GmailAuthCredentials = {
               access_token: response.access_token,
+              refresh_token: response.refresh_token, // This should now be included
               email: userInfo.email,
               expires_at: new Date(Date.now() + (response.expires_in * 1000))
             };
+
+            console.log('OAuth response received:', {
+              has_access_token: !!response.access_token,
+              has_refresh_token: !!response.refresh_token,
+              expires_in: response.expires_in
+            });
 
             resolve(credentials);
           } catch (error) {
@@ -198,7 +208,76 @@ class GmailAuthService {
     }
   }
 
-  // Get decrypted credentials for a config
+  // Refresh access token using refresh token
+  async refreshAccessToken(refreshToken: string): Promise<GmailAuthCredentials> {
+    if (!this.clientId) {
+      throw new Error('Gmail client ID not configured');
+    }
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: this.clientId,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token'
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Token refresh failed:', response.status, errorData);
+      throw new Error(`Failed to refresh access token: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    // Get user info for the refreshed token
+    const userInfo = await this.getUserInfo(data.access_token);
+    
+    return {
+      access_token: data.access_token,
+      refresh_token: refreshToken, // Keep the original refresh token
+      expires_at: new Date(Date.now() + (data.expires_in * 1000)),
+      email: userInfo.email
+    };
+  }
+
+  // Update stored token with new credentials
+  async updateStoredToken(configId: string, credentials: GmailAuthCredentials): Promise<void> {
+    if (!isEncryptionSupported()) {
+      throw new Error('Encryption not supported in this browser');
+    }
+
+    try {
+      const encryptedAccessToken = await encryptToken(credentials.access_token);
+      const encryptedRefreshToken = credentials.refresh_token 
+        ? await encryptToken(credentials.refresh_token) 
+        : null;
+
+      const { error } = await supabase
+        .from('user_email_configs')
+        .update({
+          access_token: encryptedAccessToken,
+          refresh_token: encryptedRefreshToken,
+          expires_at: credentials.expires_at?.toISOString()
+        })
+        .eq('id', configId);
+
+      if (error) {
+        throw new Error(`Failed to update stored token: ${error.message}`);
+      }
+      
+      console.log('Token successfully refreshed and updated in database');
+    } catch (error) {
+      console.error('Error updating stored token:', error);
+      throw error;
+    }
+  }
+
+  // Get decrypted credentials for a config with automatic token refresh
   async getCredentials(configId: string, userId: string): Promise<GmailAuthCredentials | null> {
     try {
       const { data, error } = await supabase
@@ -209,6 +288,7 @@ class GmailAuthService {
         .single();
 
       if (error || !data) {
+        console.log('No credentials found for config:', configId);
         return null;
       }
 
@@ -220,6 +300,32 @@ class GmailAuthService {
 
       if (data.refresh_token) {
         credentials.refresh_token = await decryptToken(data.refresh_token);
+      }
+
+      // Check if token is expired or will expire soon (5 minutes buffer)
+      const now = new Date();
+      const expiryBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
+      const isExpired = credentials.expires_at && (credentials.expires_at.getTime() - now.getTime()) < expiryBuffer;
+
+      if (isExpired && credentials.refresh_token) {
+        console.log('Token expired or expiring soon, refreshing...', {
+          expires_at: credentials.expires_at,
+          now: now,
+          time_until_expiry: credentials.expires_at ? credentials.expires_at.getTime() - now.getTime() : 'no expiry set'
+        });
+        
+        try {
+          const refreshedCredentials = await this.refreshAccessToken(credentials.refresh_token);
+          await this.updateStoredToken(configId, refreshedCredentials);
+          return refreshedCredentials;
+        } catch (refreshError) {
+          console.error('Failed to refresh token:', refreshError);
+          // Return null to indicate authentication failure
+          return null;
+        }
+      } else if (isExpired && !credentials.refresh_token) {
+        console.warn('Token expired but no refresh token available - user needs to re-authenticate');
+        return null;
       }
 
       return credentials;
@@ -280,6 +386,32 @@ class GmailAuthService {
     }
   }
 
+  // Refresh token for a specific config (used for retry logic)
+  async refreshTokenForConfig(configId: string, userId: string): Promise<GmailAuthCredentials | null> {
+    try {
+      const { data, error } = await supabase
+        .from('user_email_configs')
+        .select('refresh_token')
+        .eq('id', configId)
+        .eq('user_id', userId)
+        .single();
+
+      if (error || !data?.refresh_token) {
+        console.log('No refresh token found for config:', configId);
+        return null;
+      }
+
+      const refreshToken = await decryptToken(data.refresh_token);
+      const refreshedCredentials = await this.refreshAccessToken(refreshToken);
+      await this.updateStoredToken(configId, refreshedCredentials);
+      
+      return refreshedCredentials;
+    } catch (error) {
+      console.error('Error refreshing token for config:', error);
+      return null;
+    }
+  }
+
   // Test connection to Gmail
   async testConnection(configId: string, userId: string): Promise<boolean> {
     try {
@@ -294,6 +426,20 @@ class GmailAuthService {
           'Authorization': `Bearer ${credentials.access_token}`
         }
       });
+
+      if (response.status === 401) {
+        console.log('401 error in test connection, attempting token refresh...');
+        const refreshedCredentials = await this.refreshTokenForConfig(configId, userId);
+        if (refreshedCredentials) {
+          // Try again with refreshed token
+          const retryResponse = await fetch('https://www.googleapis.com/gmail/v1/users/me/profile', {
+            headers: {
+              'Authorization': `Bearer ${refreshedCredentials.access_token}`
+            }
+          });
+          return retryResponse.ok;
+        }
+      }
 
       return response.ok;
     } catch (error) {

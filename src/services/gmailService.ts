@@ -58,6 +58,12 @@ class GmailService {
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Gmail API error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
         throw new Error(`Gmail API error: ${response.status} ${response.statusText}`);
       }
 
