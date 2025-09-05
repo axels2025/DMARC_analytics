@@ -146,20 +146,59 @@ export function SyncStatusIndicator({
     return `${seconds}s`;
   };
 
-  const getSyncProgressPercentage = (progress: SyncProgress): number => {
+  const getSyncProgressInfo = (progress: SyncProgress): {
+    showPercentage: boolean;
+    percentage: number;
+    progressType: 'determinate' | 'indeterminate';
+    stageDescription: string;
+  } => {
     switch (progress.phase) {
       case 'searching':
-        return 10;
+        return {
+          showPercentage: false,
+          percentage: 0,
+          progressType: 'indeterminate',
+          stageDescription: 'Stage 1: Searching for emails with DMARC attachments'
+        };
       case 'downloading':
-        return 30;
+        return {
+          showPercentage: false,
+          percentage: 0,
+          progressType: 'indeterminate',
+          stageDescription: 'Stage 2: Downloading email attachments'
+        };
       case 'processing':
-        return 60 + (progress.processed || 0) / Math.max(progress.attachmentsFound || 1, 1) * 30;
+        const totalAttachments = progress.attachmentsFound || 1;
+        const processed = progress.processed || 0;
+        const percentage = (processed / totalAttachments) * 100;
+        
+        return {
+          showPercentage: true,
+          percentage: Math.min(percentage, 100),
+          progressType: 'determinate',
+          stageDescription: `Stage 3: Processing attachments (${processed}/${totalAttachments})`
+        };
       case 'completed':
-        return 100;
+        return {
+          showPercentage: true,
+          percentage: 100,
+          progressType: 'determinate',
+          stageDescription: 'Stage 4: Sync completed successfully'
+        };
       case 'error':
-        return 0;
+        return {
+          showPercentage: false,
+          percentage: 0,
+          progressType: 'determinate',
+          stageDescription: 'Sync encountered an error'
+        };
       default:
-        return 0;
+        return {
+          showPercentage: false,
+          percentage: 0,
+          progressType: 'indeterminate',
+          stageDescription: 'Preparing sync...'
+        };
     }
   };
 
@@ -199,25 +238,74 @@ export function SyncStatusIndicator({
           </div>
         )}
 
-        {/* Sync Progress */}
+        {/* Enhanced Sync Progress */}
         {(isManualSyncing || config.sync_status === 'syncing') && syncProgress && (
-          <div className="space-y-2">
+          <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Syncing...</span>
-              <span className="text-sm text-gray-500">
-                {getSyncProgressPercentage(syncProgress).toFixed(0)}%
-              </span>
+              <span className="text-sm font-medium text-blue-900">Gmail Sync in Progress</span>
+              {getSyncProgressInfo(syncProgress).showPercentage && (
+                <span className="text-sm text-blue-700 font-mono">
+                  {getSyncProgressInfo(syncProgress).percentage.toFixed(0)}%
+                </span>
+              )}
             </div>
-            <Progress value={getSyncProgressPercentage(syncProgress)} className="h-2" />
-            <p className="text-sm text-gray-600">{syncProgress.message}</p>
             
-            {syncProgress.processed !== undefined && syncProgress.attachmentsFound && (
-              <div className="flex gap-4 text-xs text-gray-500">
-                <span>Found: {syncProgress.attachmentsFound}</span>
-                <span>Processed: {syncProgress.processed}</span>
-                <span>Skipped: {syncProgress.skipped || 0}</span>
-                {syncProgress.errors && syncProgress.errors > 0 && (
-                  <span className="text-red-600">Errors: {syncProgress.errors}</span>
+            {/* Stage Description */}
+            <div className="text-sm text-blue-800">
+              {getSyncProgressInfo(syncProgress).stageDescription}
+            </div>
+            
+            {/* Progress Bar */}
+            <div className="space-y-2">
+              {getSyncProgressInfo(syncProgress).progressType === 'indeterminate' ? (
+                <div className="h-2 bg-blue-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 rounded-full animate-pulse w-2/3"></div>
+                </div>
+              ) : (
+                <Progress 
+                  value={getSyncProgressInfo(syncProgress).percentage} 
+                  className="h-2 bg-blue-200"
+                />
+              )}
+              
+              {/* Current Message */}
+              <p className="text-sm text-blue-700">{syncProgress.message}</p>
+            </div>
+            
+            {/* Statistics */}
+            {(syncProgress.attachmentsFound || syncProgress.processed !== undefined) && (
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                {syncProgress.attachmentsFound && (
+                  <div className="text-center p-2 bg-white rounded border">
+                    <div className="text-lg font-bold text-blue-600">
+                      {syncProgress.attachmentsFound}
+                    </div>
+                    <div className="text-blue-800 text-xs">Attachments Found</div>
+                  </div>
+                )}
+                {syncProgress.processed !== undefined && (
+                  <div className="text-center p-2 bg-white rounded border">
+                    <div className="text-lg font-bold text-green-600">
+                      {syncProgress.processed}
+                    </div>
+                    <div className="text-green-800 text-xs">Processed</div>
+                  </div>
+                )}
+                {(syncProgress.skipped !== undefined && syncProgress.skipped > 0) && (
+                  <div className="text-center p-2 bg-white rounded border">
+                    <div className="text-lg font-bold text-yellow-600">
+                      {syncProgress.skipped}
+                    </div>
+                    <div className="text-yellow-800 text-xs">Skipped</div>
+                  </div>
+                )}
+                {(syncProgress.errors !== undefined && syncProgress.errors > 0) && (
+                  <div className="text-center p-2 bg-white rounded border">
+                    <div className="text-lg font-bold text-red-600">
+                      {syncProgress.errors}
+                    </div>
+                    <div className="text-red-800 text-xs">Errors</div>
+                  </div>
                 )}
               </div>
             )}

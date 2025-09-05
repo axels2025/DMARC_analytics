@@ -14,6 +14,7 @@ interface GmailOAuthButtonProps {
   variant?: 'default' | 'outline' | 'ghost';
   size?: 'default' | 'sm' | 'lg';
   showStatus?: boolean;
+  mode?: 'connect' | 'add'; // New prop to determine if we're adding another account
 }
 
 export function GmailOAuthButton({
@@ -23,7 +24,8 @@ export function GmailOAuthButton({
   disabled = false,
   variant = 'default',
   size = 'default',
-  showStatus = true
+  showStatus = true,
+  mode = 'connect'
 }: GmailOAuthButtonProps) {
   const { user } = useAuth();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -39,11 +41,13 @@ export function GmailOAuthButton({
     setConfigurationStatus(status);
   }, []);
   
-  // Check if Gmail is already connected
-  const gmailConfig = existingConfigs.find(config => 
+  // Check if Gmail is already connected - for 'connect' mode, find any active Gmail
+  // For 'add' mode, we're always in "add new" state
+  const gmailConfigs = existingConfigs.filter(config => 
     config.provider === 'gmail' && config.is_active
   );
-  const isConnected = !!gmailConfig;
+  const isConnected = mode === 'connect' ? gmailConfigs.length > 0 : false;
+  const primaryGmailConfig = gmailConfigs[0]; // Use first active config for display
 
   const handleConnect = async () => {
     // Check if Gmail integration is configured
@@ -91,9 +95,14 @@ export function GmailOAuthButton({
         onConfigUpdated?.(updatedConfigs);
       }
 
+      const toastTitle = mode === 'add' ? 'Gmail Account Added' : 'Gmail Connected Successfully';
+      const toastDescription = mode === 'add' 
+        ? `Added ${credentials.email} to your connected accounts.`
+        : `Connected ${credentials.email} for automatic DMARC report syncing.`;
+
       toast({
-        title: 'Gmail Connected Successfully',
-        description: `Connected ${credentials.email} for automatic DMARC report syncing.`,
+        title: toastTitle,
+        description: toastDescription,
         variant: 'default'
       });
 
@@ -113,10 +122,16 @@ export function GmailOAuthButton({
   };
 
   const handleDisconnect = async () => {
-    if (!user || !gmailConfig) return;
+    if (!user || !primaryGmailConfig) return;
+
+    const confirmMessage = gmailConfigs.length > 1 
+      ? `Are you sure you want to disconnect ${primaryGmailConfig.email_address}? You have ${gmailConfigs.length} Gmail accounts connected.`
+      : `Are you sure you want to disconnect ${primaryGmailConfig.email_address}?`;
+
+    if (!confirm(confirmMessage)) return;
 
     try {
-      await gmailAuthService.deleteEmailConfig(gmailConfig.id, user.id);
+      await gmailAuthService.deleteEmailConfig(primaryGmailConfig.id, user.id);
       
       // Get updated configs
       const updatedConfigs = await gmailAuthService.getUserEmailConfigs(user.id);
@@ -124,7 +139,7 @@ export function GmailOAuthButton({
 
       toast({
         title: 'Gmail Disconnected',
-        description: 'Gmail account has been disconnected.',
+        description: `${primaryGmailConfig.email_address} has been disconnected.`,
         variant: 'default'
       });
 
@@ -156,28 +171,34 @@ export function GmailOAuthButton({
       );
     }
 
-    if (isConnected) {
+    if (isConnected && mode === 'connect') {
+      const accountCount = gmailConfigs.length;
+      const displayText = accountCount === 1 
+        ? 'Connected to Gmail' 
+        : `${accountCount} Gmail Accounts`;
+      
       return (
         <>
           <CheckCircle className="w-4 h-4 mr-2 text-green-600" />
-          Connected to Gmail
+          {displayText}
         </>
       );
     }
 
+    const buttonText = mode === 'add' ? 'Add Another Gmail' : 'Connect Gmail';
     return (
       <>
         <Mail className="w-4 h-4 mr-2" />
-        Connect Gmail
+        {buttonText}
       </>
     );
   };
 
   const getStatusBadge = () => {
-    if (!showStatus || !gmailConfig) return null;
+    if (!showStatus || !primaryGmailConfig || mode === 'add') return null;
 
     const getStatusColor = () => {
-      switch (gmailConfig.sync_status) {
+      switch (primaryGmailConfig.sync_status) {
         case 'syncing':
           return 'bg-blue-100 text-blue-800 border-blue-200';
         case 'completed':
@@ -190,7 +211,7 @@ export function GmailOAuthButton({
     };
 
     const getStatusIcon = () => {
-      switch (gmailConfig.sync_status) {
+      switch (primaryGmailConfig.sync_status) {
         case 'syncing':
           return <Loader className="w-3 h-3 animate-spin" />;
         case 'completed':
@@ -202,10 +223,15 @@ export function GmailOAuthButton({
       }
     };
 
+    // Show summary status for multiple accounts
+    const statusText = gmailConfigs.length > 1 
+      ? `${gmailConfigs.filter(c => c.sync_status === 'completed').length}/${gmailConfigs.length} Active`
+      : primaryGmailConfig.sync_status;
+
     return (
       <Badge variant="outline" className={`ml-2 ${getStatusColor()}`}>
         {getStatusIcon()}
-        <span className="ml-1 capitalize">{gmailConfig.sync_status}</span>
+        <span className="ml-1 capitalize">{statusText}</span>
       </Badge>
     );
   };

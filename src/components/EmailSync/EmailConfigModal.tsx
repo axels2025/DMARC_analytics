@@ -221,27 +221,59 @@ export function EmailConfigModal({
           {/* Add New Connection */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Connect New Email Account</CardTitle>
+              <CardTitle className="text-lg">
+                {configs.length === 0 ? 'Connect New Email Account' : 'Gmail Integration'}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {gmailAuthService.isGmailConfigured() ? (
-                <div className="flex flex-col sm:flex-row gap-4 items-start">
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-600 mb-4">
-                      Connect your Gmail account to automatically fetch DMARC reports. 
-                      We'll search for emails with DMARC report attachments and process them automatically.
-                    </p>
-                    <div className="flex items-center gap-2 text-sm text-gray-500">
-                      <Shield className="w-4 h-4" />
-                      <span>Read-only access to your Gmail account</span>
+                <div className="space-y-4">
+                  {configs.length === 0 ? (
+                    // First connection
+                    <div className="flex flex-col sm:flex-row gap-4 items-start">
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-600 mb-4">
+                          Connect your Gmail account to automatically fetch DMARC reports. 
+                          We'll search for emails with DMARC report attachments and process them automatically.
+                        </p>
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <Shield className="w-4 h-4" />
+                          <span>Read-only access to your Gmail account</span>
+                        </div>
+                      </div>
+                      <GmailOAuthButton
+                        onConfigAdded={handleConfigAdded}
+                        onConfigUpdated={handleConfigsUpdated}
+                        existingConfigs={configs}
+                        showStatus={false}
+                        mode="connect"
+                      />
                     </div>
-                  </div>
-                  <GmailOAuthButton
-                    onConfigAdded={handleConfigAdded}
-                    onConfigUpdated={handleConfigsUpdated}
-                    existingConfigs={configs}
-                    showStatus={false}
-                  />
+                  ) : (
+                    // Additional connections
+                    <div className="flex flex-col sm:flex-row gap-4 items-start">
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-600 mb-2">
+                          You have {configs.length} Gmail account{configs.length === 1 ? '' : 's'} connected.
+                        </p>
+                        <p className="text-sm text-gray-500 mb-4">
+                          Add another Gmail account to sync DMARC reports from multiple addresses.
+                        </p>
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <Shield className="w-4 h-4" />
+                          <span>Each account is managed separately with encrypted credentials</span>
+                        </div>
+                      </div>
+                      <GmailOAuthButton
+                        onConfigAdded={handleConfigAdded}
+                        onConfigUpdated={handleConfigsUpdated}
+                        existingConfigs={configs}
+                        showStatus={false}
+                        mode="add"
+                        variant="outline"
+                      />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-6">
