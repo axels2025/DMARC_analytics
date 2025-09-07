@@ -19,9 +19,14 @@ export interface SyncProgress {
 
 export interface SyncResult {
   success: boolean;
+  emailsFound: number;
   emailsFetched: number;
+  attachmentsFound: number;
   reportsProcessed: number;
   reportsSkipped: number;
+  emailsDeleted: number;
+  deletionEnabled: boolean;
+  deletionErrors: number;
   errors: string[];
   duration: number;
 }
@@ -89,14 +94,77 @@ class EmailProcessor {
         attachmentsFound: attachments.length
       });
 
-      // Process each attachment
-      const results = await this.processAttachments(attachments, userId, onProgress);
+      // Check if deletion is enabled for this config
+      const { data: configData } = await supabase
+        .from('user_email_configs')
+        .select('delete_after_import')
+        .eq('id', configId)
+        .single();
+      
+      const deletionEnabled = configData?.delete_after_import || false;
+
+      // Process each attachment and track which emails were successfully processed
+      const results = await this.processAttachmentsWithTracking(attachments, userId, onProgress);
+      
+      let emailsDeleted = 0;
+      let deletionErrors = 0;
+      const deletedEmailsMetadata: any[] = [];
+      
+      // Handle email deletion if enabled and reports were processed OR skipped (duplicates)
+      if (deletionEnabled && results.processedEmails.length > 0) {
+        const eligibleEmails = results.processedEmails.filter(email => email.processed);
+        
+        onProgress?.({
+          phase: 'processing',
+          message: `Processing completed. Deleting ${eligibleEmails.length} emails (including duplicates)...`,
+          processed: results.processed,
+          skipped: results.skipped,
+          errors: results.errors.length
+        });
+
+        try {
+          const deletionResult = await gmailService.bulkDeleteEmails(
+            credentials,
+            eligibleEmails.map(email => ({
+              messageId: email.messageId,
+              processed: email.processed,
+              metadata: email.metadata
+            }))
+          );
+
+          emailsDeleted = deletionResult.totalDeleted;
+          deletionErrors = deletionResult.totalErrors;
+          
+          // Store deletion audit trail
+          for (const deletedEmail of deletionResult.deletedEmails) {
+            if (deletedEmail.success && deletedEmail.deleted && deletedEmail.metadata) {
+              deletedEmailsMetadata.push({
+                messageId: deletedEmail.messageId,
+                subject: deletedEmail.metadata.subject,
+                sender: deletedEmail.metadata.sender,
+                deletedAt: new Date().toISOString(),
+                attachmentFilenames: deletedEmail.metadata.attachmentFilenames
+              });
+            }
+          }
+
+        } catch (deletionError) {
+          console.error('Email deletion failed:', deletionError);
+          deletionErrors++;
+          results.errors.push(`Email deletion failed: ${deletionError instanceof Error ? deletionError.message : 'Unknown error'}`);
+        }
+      }
       
       const result: SyncResult = {
         success: true,
+        emailsFound: messages.length,
         emailsFetched: messages.length,
+        attachmentsFound: attachments.length,
         reportsProcessed: results.processed,
         reportsSkipped: results.skipped,
+        emailsDeleted,
+        deletionEnabled,
+        deletionErrors,
         errors: results.errors,
         duration: Date.now() - startTime
       };
@@ -106,9 +174,17 @@ class EmailProcessor {
         await this.updateSyncLog(syncLogId, {
           status: 'completed',
           sync_completed_at: new Date().toISOString(),
+          emails_found: result.emailsFound,
           emails_fetched: result.emailsFetched,
+          attachments_found: result.attachmentsFound,
           reports_processed: result.reportsProcessed,
           reports_skipped: result.reportsSkipped,
+          emails_deleted: result.emailsDeleted,
+          deletion_enabled: result.deletionEnabled,
+          deletion_errors: result.deletionErrors,
+          errors_count: result.errors.length + result.deletionErrors,
+          error_details: result.errors.length > 0 ? { errors: result.errors } : null,
+          deleted_emails_metadata: deletedEmailsMetadata,
           error_message: result.errors.length > 0 ? result.errors.join('; ') : null
         });
       }
@@ -123,9 +199,11 @@ class EmailProcessor {
       const compressionMessage = attachments.length > 0 ? 
         ` (including compressed .zip and .gz files)` : '';
         
+      const deletionMessage = result.emailsDeleted > 0 ? `, deleted ${result.emailsDeleted} emails` : '';
+      
       onProgress?.({
         phase: 'completed',
-        message: `Sync completed! Processed ${result.reportsProcessed} reports${compressionMessage}, skipped ${result.reportsSkipped} duplicates.`,
+        message: `Sync completed! Processed ${result.reportsProcessed} reports${compressionMessage}, skipped ${result.reportsSkipped} duplicates${deletionMessage}.`,
         processed: result.reportsProcessed,
         skipped: result.reportsSkipped,
         errors: result.errors.length
@@ -164,6 +242,8 @@ class EmailProcessor {
         await this.updateSyncLog(syncLogId, {
           status: 'failed',
           sync_completed_at: new Date().toISOString(),
+          errors_count: 1,
+          error_details: { error: errorMessage },
           error_message: errorMessage
         });
       }
@@ -191,24 +271,49 @@ class EmailProcessor {
 
       return {
         success: false,
+        emailsFound: 0,
         emailsFetched: 0,
+        attachmentsFound: 0,
         reportsProcessed: 0,
         reportsSkipped: 0,
+        emailsDeleted: 0,
+        deletionEnabled: false,
+        deletionErrors: 0,
         errors: [finalErrorMessage],
         duration: Date.now() - startTime
       };
     }
   }
 
-  // Process multiple attachments
-  private async processAttachments(
+  // Process multiple attachments with email tracking for deletion
+  private async processAttachmentsWithTracking(
     attachments: DmarcAttachment[],
     userId: string,
     onProgress?: ProgressCallback
-  ): Promise<{ processed: number; skipped: number; errors: string[] }> {
+  ): Promise<{ 
+    processed: number; 
+    skipped: number; 
+    errors: string[];
+    processedEmails: Array<{
+      messageId: string;
+      processed: boolean;
+      metadata?: {
+        subject?: string;
+        sender?: string;
+        dateReceived?: Date;
+        attachmentFilenames?: string[];
+      };
+    }>;
+  }> {
     let processed = 0;
     let skipped = 0;
     const errors: string[] = [];
+    const emailTracker = new Map<string, { 
+      processed: boolean; 
+      attachmentCount: number; 
+      successfulCount: number;
+      metadata?: any;
+    }>();
 
     for (let i = 0; i < attachments.length; i++) {
       const attachment = attachments[i];
@@ -226,18 +331,50 @@ class EmailProcessor {
           errors: errors.length
         });
 
+        // Track email processing for deletion decision
+        const messageId = attachment.messageId;
+        if (!emailTracker.has(messageId)) {
+          emailTracker.set(messageId, {
+            processed: false,
+            attachmentCount: 0,
+            successfulCount: 0,
+            metadata: {
+              subject: `Email with ${attachment.filename}`,
+              sender: 'Unknown',
+              dateReceived: attachment.date,
+              attachmentFilenames: []
+            }
+          });
+        }
+
+        const emailData = emailTracker.get(messageId)!;
+        emailData.attachmentCount++;
+        emailData.metadata.attachmentFilenames.push(attachment.filename);
+
         const result = await this.processSingleAttachment(attachment, userId);
         
         if (result === 'processed') {
           processed++;
+          emailData.successfulCount++;
         } else if (result === 'skipped') {
           skipped++;
+          emailData.successfulCount++; // Skipped means it existed, which is still successful processing
         }
+
+        // Mark email as successfully processed if ALL its attachments were processed or skipped
+        // This means we can safely delete emails containing duplicate reports
+        emailData.processed = emailData.successfulCount === emailData.attachmentCount;
 
       } catch (error) {
         const errorMsg = `Error processing ${attachment.filename}: ${error instanceof Error ? error.message : 'Unknown error'}`;
         errors.push(errorMsg);
         console.error(errorMsg, error);
+        
+        // Email with failed attachments should not be deleted
+        const emailData = emailTracker.get(attachment.messageId);
+        if (emailData) {
+          emailData.processed = false; // Mark as failed to prevent deletion
+        }
         
         // Log additional details for XML parser errors specifically
         if (error instanceof Error && error.message.includes('XML parser error')) {
@@ -252,7 +389,28 @@ class EmailProcessor {
       }
     }
 
-    return { processed, skipped, errors };
+    // Convert email tracker to array for deletion processing
+    const processedEmails = Array.from(emailTracker.entries()).map(([messageId, data]) => ({
+      messageId,
+      processed: data.processed,
+      metadata: data.metadata
+    }));
+
+    return { processed, skipped, errors, processedEmails };
+  }
+
+  // Process multiple attachments (legacy method for backward compatibility)
+  private async processAttachments(
+    attachments: DmarcAttachment[],
+    userId: string,
+    onProgress?: ProgressCallback
+  ): Promise<{ processed: number; skipped: number; errors: string[] }> {
+    const result = await this.processAttachmentsWithTracking(attachments, userId, onProgress);
+    return {
+      processed: result.processed,
+      skipped: result.skipped,
+      errors: result.errors
+    };
   }
 
   // Process a single DMARC attachment (may contain multiple XML files)
@@ -455,9 +613,14 @@ class EmailProcessor {
     started_at: Date;
     completed_at: Date | null;
     status: string;
+    emails_found: number;
     emails_fetched: number;
+    attachments_found: number;
     reports_processed: number;
     reports_skipped: number;
+    emails_deleted: number;
+    deletion_enabled: boolean;
+    errors_count: number;
     error_message: string | null;
     duration: number | null;
   }>> {
@@ -478,9 +641,14 @@ class EmailProcessor {
         started_at: new Date(log.sync_started_at),
         completed_at: log.sync_completed_at ? new Date(log.sync_completed_at) : null,
         status: log.status,
+        emails_found: log.emails_found || 0,
         emails_fetched: log.emails_fetched || 0,
+        attachments_found: log.attachments_found || 0,
         reports_processed: log.reports_processed || 0,
         reports_skipped: log.reports_skipped || 0,
+        emails_deleted: log.emails_deleted || 0,
+        deletion_enabled: log.deletion_enabled || false,
+        errors_count: log.errors_count || 0,
         error_message: log.error_message,
         duration: log.sync_completed_at 
           ? new Date(log.sync_completed_at).getTime() - new Date(log.sync_started_at).getTime()

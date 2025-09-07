@@ -644,8 +644,18 @@ export const useSPFFlatteningHistory = (domain?: string) => {
       setOperations(formattedOperations);
     } catch (err) {
       console.error('[useSPFFlatteningHistory] Failed to fetch operations:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch flattening operations');
-      setOperations([]);
+      
+      // Check if error is due to missing table (migrations not applied)
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (errorMessage.includes('does not exist') || errorMessage.includes('42P01') || errorMessage.includes('404')) {
+        console.warn('[useSPFFlatteningHistory] SPF flattening operations table does not exist - migrations may not be applied');
+        // Provide empty operations instead of error
+        setOperations([]);
+        setError('SPF flattening feature is not yet available. Please contact support to enable this feature.');
+      } else {
+        setError('Failed to fetch SPF flattening operations');
+        setOperations([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -685,6 +695,7 @@ export const useSPFFlatteningHistory = (domain?: string) => {
     operations,
     loading,
     error,
+    fetchOperations,
     revertOperation,
     refreshOperations: fetchOperations
   };

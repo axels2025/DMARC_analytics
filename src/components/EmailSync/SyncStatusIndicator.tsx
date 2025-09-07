@@ -38,9 +38,14 @@ export function SyncStatusIndicator({
     started_at: Date;
     completed_at: Date | null;
     status: string;
+    emails_found: number;
     emails_fetched: number;
+    attachments_found: number;
     reports_processed: number;
     reports_skipped: number;
+    emails_deleted: number;
+    deletion_enabled: boolean;
+    errors_count: number;
     error_message: string | null;
     duration: number | null;
   }>>([]);
@@ -73,9 +78,12 @@ export function SyncStatusIndicator({
 
       // Show result
       if (result.success) {
+        const deletionMessage = result.emailsDeleted > 0 
+          ? `, deleted ${result.emailsDeleted} emails` 
+          : '';
         toast({
           title: 'Sync Completed',
-          description: `Processed ${result.reportsProcessed} reports, skipped ${result.reportsSkipped} duplicates.`,
+          description: `Found ${result.emailsFound} emails, processed ${result.reportsProcessed} reports, skipped ${result.reportsSkipped} duplicates${deletionMessage}.`,
           variant: 'default'
         });
       } else {
@@ -167,7 +175,7 @@ export function SyncStatusIndicator({
           progressType: 'indeterminate',
           stageDescription: 'Stage 2: Downloading email attachments'
         };
-      case 'processing':
+      case 'processing': {
         const totalAttachments = progress.attachmentsFound || 1;
         const processed = progress.processed || 0;
         const percentage = (processed / totalAttachments) * 100;
@@ -178,6 +186,7 @@ export function SyncStatusIndicator({
           progressType: 'determinate',
           stageDescription: `Stage 3: Processing attachments (${processed}/${totalAttachments})`
         };
+      }
       case 'completed':
         return {
           showPercentage: true,
@@ -325,29 +334,74 @@ export function SyncStatusIndicator({
           </Button>
         </div>
 
-        {/* Sync History */}
+        {/* Enhanced Sync History with Detailed Statistics */}
         {showDetails && syncHistory.length > 0 && (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <h4 className="font-medium text-sm flex items-center gap-2">
               <Calendar className="w-4 h-4" />
               Recent Syncs
             </h4>
-            <div className="space-y-1">
+            <div className="space-y-2">
               {syncHistory.slice(0, 3).map((sync) => (
-                <div key={sync.id} className="flex items-center justify-between text-xs py-1 px-2 bg-gray-50 rounded">
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(sync.status)}
-                    <span>{format(sync.started_at, 'MMM d, h:mm a')}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-gray-600">
-                    <span className="flex items-center gap-1">
-                      <FileText className="w-3 h-3" />
-                      {sync.reports_processed}
-                    </span>
+                <div key={sync.id} className="bg-gray-50 rounded-lg p-3 space-y-2">
+                  {/* Sync Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {getStatusIcon(sync.status)}
+                      <span className="text-xs font-medium text-gray-700">
+                        {format(sync.started_at, 'MMM d, yyyy h:mm a')}
+                      </span>
+                    </div>
                     {sync.duration && (
-                      <span>{formatDuration(sync.duration)}</span>
+                      <span className="text-xs text-gray-500 font-mono">
+                        {formatDuration(sync.duration)}
+                      </span>
                     )}
                   </div>
+
+                  {/* Enhanced Statistics Grid */}
+                  {sync.status === 'completed' && (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+                      <div className="bg-white rounded p-2 text-center border">
+                        <div className="text-sm font-bold text-blue-600">
+                          {sync.emails_found || sync.emails_fetched || 0}
+                        </div>
+                        <div className="text-gray-600 text-xs">Emails Found</div>
+                      </div>
+                      
+                      <div className="bg-white rounded p-2 text-center border">
+                        <div className="text-sm font-bold text-green-600">
+                          {sync.reports_processed || 0}
+                        </div>
+                        <div className="text-gray-600 text-xs">Reports Imported</div>
+                      </div>
+                      
+                      {(sync.reports_skipped || 0) > 0 && (
+                        <div className="bg-white rounded p-2 text-center border">
+                          <div className="text-sm font-bold text-yellow-600">
+                            {sync.reports_skipped}
+                          </div>
+                          <div className="text-gray-600 text-xs">Duplicates Skipped</div>
+                        </div>
+                      )}
+                      
+                      {(sync.emails_deleted || 0) > 0 && (
+                        <div className="bg-white rounded p-2 text-center border">
+                          <div className="text-sm font-bold text-red-600">
+                            {sync.emails_deleted}
+                          </div>
+                          <div className="text-gray-600 text-xs">Emails Deleted</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error Message */}
+                  {sync.status === 'failed' && sync.error_message && (
+                    <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-200">
+                      {sync.error_message}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

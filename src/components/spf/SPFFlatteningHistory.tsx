@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { useSPFFlatteningHistory, SPFFlatteningOperation } from '@/hooks/useSPFAnalysis';
+import SPFErrorBoundary from './SPFErrorBoundary';
 
 // Using SPFFlatteningOperation from the hook instead of FlatteningHistoryEntry
 
@@ -41,7 +42,7 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
   const [viewMode, setViewMode] = useState<'timeline' | 'comparison'>('timeline');
   
   // Use the proper database hook
-  const { operations: filteredHistory, loading, error, fetchOperations } = useSPFFlatteningHistory(domain);
+  const { operations: filteredHistory, loading, error, refreshOperations: fetchOperations } = useSPFFlatteningHistory(domain);
   
   useEffect(() => {
     fetchOperations();
@@ -71,9 +72,9 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
     navigator.clipboard.writeText(text);
   };
 
-  const calculateSavings = (entry: FlatteningHistoryEntry) => {
-    const lookupSavings = entry.lookupsBefore - entry.lookupsAfter;
-    const ipAddition = entry.ipCountAfter - entry.ipCountBefore;
+  const calculateSavings = (entry: SPFFlatteningOperation) => {
+    const lookupSavings = entry.originalLookupCount - (entry.newLookupCount || 0);
+    const ipAddition = (entry.ipCount || 0) - 0; // Original IP count was 0 before flattening
     return { lookupSavings, ipAddition };
   };
 
@@ -88,9 +89,9 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
     const previous = filteredHistory[1];
     
     return {
-      lookupDiff: latest.lookupsAfter - previous.lookupsAfter,
-      ipDiff: latest.ipCountAfter - previous.ipCountAfter,
-      includesDiff: latest.includesFlattened.length - previous.includesFlattened.length
+      lookupDiff: (latest.newLookupCount || 0) - (previous.newLookupCount || 0),
+      ipDiff: (latest.ipCount || 0) - (previous.ipCount || 0),
+      includesDiff: latest.targetIncludes.length - previous.targetIncludes.length
     };
   };
 
@@ -491,4 +492,11 @@ const SPFFlatteningHistory: React.FC<SPFFlatteningHistoryProps> = ({
   );
 };
 
-export default SPFFlatteningHistory;
+// Wrap component with error boundary for better error handling
+const SPFFlatteningHistoryWithErrorBoundary: React.FC<SPFFlatteningHistoryProps> = (props) => (
+  <SPFErrorBoundary onRetry={() => window.location.reload()}>
+    <SPFFlatteningHistory {...props} />
+  </SPFErrorBoundary>
+);
+
+export default SPFFlatteningHistoryWithErrorBoundary;

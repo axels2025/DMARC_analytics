@@ -465,15 +465,223 @@ class GmailService {
     }
   }
 
-  // Get recent sync statistics
+  // Delete an email from Gmail with safety checks
+  async deleteEmail(
+    credentials: GmailAuthCredentials,
+    messageId: string,
+    emailMetadata?: {
+      subject?: string;
+      sender?: string;
+      dateReceived?: Date;
+      attachmentFilenames?: string[];
+    }
+  ): Promise<{
+    success: boolean;
+    deleted: boolean;
+    error?: string;
+    metadata?: any;
+  }> {
+    try {
+      console.log(`[deleteEmail] Attempting to delete email with ID: ${messageId}`);
+      
+      // Safety check: Verify this is a DMARC-related email before deletion
+      const message = await this.getMessage(credentials, messageId);
+      if (!message) {
+        return {
+          success: false,
+          deleted: false,
+          error: 'Could not retrieve email for safety verification'
+        };
+      }
+
+      // Safety check: Ensure email contains DMARC attachments
+      const messageAttachments = await this.getMessageAttachments(credentials, message);
+      const hasDmarcAttachments = messageAttachments.length > 0;
+      
+      if (!hasDmarcAttachments) {
+        console.warn(`[deleteEmail] Email ${messageId} has no DMARC attachments - skipping deletion for safety`);
+        return {
+          success: true,
+          deleted: false,
+          error: 'Email contains no DMARC attachments - deletion skipped for safety'
+        };
+      }
+
+      // Perform the deletion
+      const response = await fetch(`${this.baseUrl}/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[deleteEmail] Failed to delete email ${messageId}:`, {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        
+        return {
+          success: false,
+          deleted: false,
+          error: `Gmail API error: ${response.status} ${response.statusText}`
+        };
+      }
+
+      console.log(`[deleteEmail] Successfully deleted email ${messageId}`);
+      
+      // Extract metadata for audit trail
+      const headers = message.payload?.headers || [];
+      const subjectHeader = headers.find(h => h.name.toLowerCase() === 'subject');
+      const fromHeader = headers.find(h => h.name.toLowerCase() === 'from');
+      
+      return {
+        success: true,
+        deleted: true,
+        metadata: {
+          subject: emailMetadata?.subject || subjectHeader?.value || 'Unknown',
+          sender: emailMetadata?.sender || fromHeader?.value || 'Unknown',
+          dateReceived: emailMetadata?.dateReceived || new Date(parseInt(message.internalDate)),
+          attachmentFilenames: emailMetadata?.attachmentFilenames || messageAttachments.map(a => a.filename)
+        }
+      };
+
+    } catch (error) {
+      console.error(`[deleteEmail] Error deleting email ${messageId}:`, error);
+      return {
+        success: false,
+        deleted: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  // Bulk delete emails with rate limiting and safety checks
+  async bulkDeleteEmails(
+    credentials: GmailAuthCredentials,
+    emailDeletions: Array<{
+      messageId: string;
+      processed: boolean; // Only delete if successfully processed
+      metadata?: {
+        subject?: string;
+        sender?: string;
+        dateReceived?: Date;
+        attachmentFilenames?: string[];
+      };
+    }>,
+    maxDeletionsPerSecond: number = 2
+  ): Promise<{
+    totalAttempted: number;
+    totalDeleted: number;
+    totalSkipped: number;
+    totalErrors: number;
+    deletedEmails: Array<{
+      messageId: string;
+      success: boolean;
+      deleted: boolean;
+      error?: string;
+      metadata?: any;
+    }>;
+  }> {
+    console.log(`[bulkDeleteEmails] Starting bulk deletion of ${emailDeletions.length} emails`);
+    
+    const results: Array<{
+      messageId: string;
+      success: boolean;
+      deleted: boolean;
+      error?: string;
+      metadata?: any;
+    }> = [];
+    
+    let totalDeleted = 0;
+    let totalSkipped = 0;
+    let totalErrors = 0;
+    
+    const delayBetweenRequests = Math.max(1000 / maxDeletionsPerSecond, 100); // At least 100ms
+    
+    for (let i = 0; i < emailDeletions.length; i++) {
+      const emailDeletion = emailDeletions[i];
+      
+      try {
+        // Safety check: Only delete emails that were successfully processed
+        if (!emailDeletion.processed) {
+          console.log(`[bulkDeleteEmails] Skipping deletion of ${emailDeletion.messageId} - not successfully processed`);
+          results.push({
+            messageId: emailDeletion.messageId,
+            success: true,
+            deleted: false,
+            error: 'Skipped - email not successfully processed'
+          });
+          totalSkipped++;
+          continue;
+        }
+        
+        const deleteResult = await this.deleteEmail(
+          credentials, 
+          emailDeletion.messageId,
+          emailDeletion.metadata
+        );
+        
+        results.push({
+          messageId: emailDeletion.messageId,
+          ...deleteResult
+        });
+        
+        if (deleteResult.success && deleteResult.deleted) {
+          totalDeleted++;
+        } else if (deleteResult.success && !deleteResult.deleted) {
+          totalSkipped++;
+        } else {
+          totalErrors++;
+        }
+        
+        // Rate limiting delay (except for last item)
+        if (i < emailDeletions.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+        }
+        
+      } catch (error) {
+        console.error(`[bulkDeleteEmails] Unexpected error deleting ${emailDeletion.messageId}:`, error);
+        results.push({
+          messageId: emailDeletion.messageId,
+          success: false,
+          deleted: false,
+          error: error instanceof Error ? error.message : 'Unexpected error'
+        });
+        totalErrors++;
+      }
+    }
+    
+    console.log(`[bulkDeleteEmails] Bulk deletion completed: ${totalDeleted} deleted, ${totalSkipped} skipped, ${totalErrors} errors`);
+    
+    return {
+      totalAttempted: emailDeletions.length,
+      totalDeleted,
+      totalSkipped,
+      totalErrors,
+      deletedEmails: results
+    };
+  }
+
+  // Get recent sync statistics with enhanced metrics
   async getSyncStats(configId: string): Promise<{
     lastSync: Date | null;
     totalSyncs: number;
     recentSyncs: Array<{
       date: Date;
+      emailsFound: number;
       emailsFetched: number;
+      attachmentsFound: number;
       reportsProcessed: number;
+      reportsSkipped: number;
+      emailsDeleted: number;
+      deletionEnabled: boolean;
+      duration: number | null;
       status: string;
+      errorMessage?: string;
     }>;
   }> {
     try {
@@ -481,7 +689,7 @@ class GmailService {
         .from('email_sync_logs')
         .select('*')
         .eq('config_id', configId)
-        .order('created_at', { ascending: false })
+        .order('sync_started_at', { ascending: false })
         .limit(10);
 
       if (error) {
@@ -495,9 +703,16 @@ class GmailService {
         totalSyncs: logs.length,
         recentSyncs: logs.map(log => ({
           date: new Date(log.sync_started_at),
+          emailsFound: log.emails_found || 0,
           emailsFetched: log.emails_fetched || 0,
+          attachmentsFound: log.attachments_found || 0,
           reportsProcessed: log.reports_processed || 0,
-          status: log.status
+          reportsSkipped: log.reports_skipped || 0,
+          emailsDeleted: log.emails_deleted || 0,
+          deletionEnabled: log.deletion_enabled || false,
+          duration: log.sync_duration_seconds,
+          status: log.status,
+          errorMessage: log.error_message
         }))
       };
     } catch (error) {

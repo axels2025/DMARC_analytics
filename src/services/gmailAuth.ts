@@ -1,12 +1,26 @@
 import { GoogleAuth } from 'google-auth-library';
 import { supabase } from '@/integrations/supabase/client';
-import { encryptToken, decryptToken, isEncryptionSupported } from '@/utils/encryption';
+import { 
+  encryptToken, 
+  decryptToken, 
+  isEncryptionSupported, 
+  clearEncryptionKey,
+  getEncryptionKeyStatus 
+} from '@/utils/encryption';
 
-// Gmail API scopes needed for reading emails
-const GMAIL_SCOPES = [
+// Gmail API scopes needed for reading emails and optional email deletion
+const GMAIL_SCOPES_READ_ONLY = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/userinfo.email'
 ];
+
+const GMAIL_SCOPES_WITH_MODIFY = [
+  'https://www.googleapis.com/auth/gmail.modify', // Allows reading and modifying (including deleting) emails
+  'https://www.googleapis.com/auth/userinfo.email'
+];
+
+// Default scopes - can be upgraded to modify scopes if user enables deletion
+const GMAIL_SCOPES = GMAIL_SCOPES_READ_ONLY;
 
 export interface GmailAuthCredentials {
   access_token: string;
@@ -153,6 +167,12 @@ class GmailAuthService {
     }
 
     try {
+      console.log('[saveEmailConfig] Starting to save Gmail credentials for user:', userId);
+      
+      // Ensure encryption key is stored in database for this user
+      // The encryptToken function will handle this automatically, but we log it for verification
+      console.log('[saveEmailConfig] Encryption system will ensure database key storage during token encryption');
+      
       // Encrypt the access token before storing
       const encryptedAccessToken = await encryptToken(credentials.access_token);
       const encryptedRefreshToken = credentials.refresh_token 
@@ -503,6 +523,236 @@ class GmailAuthService {
     } catch (error) {
       console.error('Connection test failed:', error);
       return false;
+    }
+  }
+
+  // Clear all encryption keys (useful for troubleshooting)
+  async clearAllEncryptionKeys(): Promise<void> {
+    console.log('[GmailAuth] Clearing all encryption keys - this will require users to re-authenticate');
+    await clearEncryptionKey();
+  }
+
+  // Get encryption key status for debugging
+  async getEncryptionStatus(): Promise<{
+    hasSessionKey: boolean;
+    hasLegacyKey: boolean;
+    hasDatabaseKeys: boolean;
+    sessionKeyPreview: string;
+    databaseKeyCount: number;
+    userId: string | null;
+  }> {
+    return await getEncryptionKeyStatus();
+  }
+
+  // Force re-authentication by clearing credentials and encryption keys
+  async forceReauthentication(userId: string): Promise<void> {
+    try {
+      console.log('[forceReauthentication] Forcing re-authentication for user:', userId);
+      
+      // Delete all email configs for this user
+      const { error: deleteError } = await supabase
+        .from('user_email_configs')
+        .delete()
+        .eq('user_id', userId);
+      
+      if (deleteError) {
+        console.warn('[forceReauthentication] Failed to delete email configs:', deleteError);
+      }
+      
+      // Clear encryption keys
+      await clearEncryptionKey();
+      
+      console.log('[forceReauthentication] Re-authentication forced successfully');
+    } catch (error) {
+      console.error('[forceReauthentication] Error during force re-authentication:', error);
+      throw error;
+    }
+  }
+
+  // Migrate legacy localStorage tokens to database (called automatically by decryptToken)
+  async migrateLegacyTokens(userId: string): Promise<void> {
+    try {
+      console.log('[migrateLegacyTokens] Checking for legacy tokens to migrate for user:', userId);
+      
+      const legacyKey = localStorage.getItem('dmarc_encryption_key');
+      if (legacyKey) {
+        console.log('[migrateLegacyTokens] Found legacy key, attempting migration');
+        
+        // The new encryption system will handle this automatically
+        // Just trigger it by calling getEncryptionPassword
+        const { getEncryptionPassword } = await import('@/utils/encryption');
+        await getEncryptionPassword();
+        
+        console.log('[migrateLegacyTokens] Legacy key migration completed');
+      } else {
+        console.log('[migrateLegacyTokens] No legacy keys found');
+      }
+    } catch (error) {
+      console.warn('[migrateLegacyTokens] Migration failed:', error);
+    }
+  }
+
+  // Check if current token has email modification permissions
+  async checkDeletionPermissions(credentials: GmailAuthCredentials): Promise<boolean> {
+    try {
+      // Test if we can access the Gmail modify API by attempting to list labels
+      // This is a safe operation that requires gmail.modify scope
+      const response = await fetch('https://www.googleapis.com/gmail/v1/users/me/labels', {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`
+        }
+      });
+
+      // If we get 403, it means we don't have sufficient permissions
+      // If we get 401, the token is invalid
+      // If we get 200, we have the necessary permissions
+      return response.status === 200;
+    } catch (error) {
+      console.error('Error checking deletion permissions:', error);
+      return false;
+    }
+  }
+
+  // Start OAuth flow with specific scopes (for upgrading permissions)
+  async startOAuthFlowWithScopes(requireModifyScope: boolean = false): Promise<GmailAuthCredentials> {
+    if (!this.isConfigured) {
+      throw new Error('Gmail integration not configured. Please set VITE_GOOGLE_CLIENT_ID environment variable.');
+    }
+
+    const scopes = requireModifyScope ? GMAIL_SCOPES_WITH_MODIFY : GMAIL_SCOPES_READ_ONLY;
+
+    return new Promise((resolve, reject) => {
+      try {
+        const client = window.google?.accounts.oauth2.initTokenClient({
+          client_id: this.clientId!,
+          scope: scopes.join(' '),
+          callback: async (response: any) => {
+            try {
+              if (response.error) {
+                reject(new Error(`OAuth error: ${response.error}`));
+                return;
+              }
+
+              console.log('OAuth response received:', { 
+                has_access_token: !!response.access_token,
+                scope: response.scope 
+              });
+
+              // Get user info to get email
+              const userInfoResponse = await fetch(`https://www.googleapis.com/oauth2/v2/userinfo?access_token=${response.access_token}`);
+              
+              if (!userInfoResponse.ok) {
+                throw new Error('Failed to get user info from Google API');
+              }
+
+              const userInfo = await userInfoResponse.json();
+              console.log('User info obtained:', { email: userInfo.email });
+
+              const credentials: GmailAuthCredentials = {
+                access_token: response.access_token,
+                email: userInfo.email,
+                expires_at: new Date(Date.now() + 3600 * 1000) // 1 hour from now (default)
+              };
+
+              // Check if we have a refresh token (only provided on first consent)
+              if (response.refresh_token) {
+                credentials.refresh_token = response.refresh_token;
+              }
+
+              resolve(credentials);
+            } catch (error) {
+              console.error('Error in OAuth callback:', error);
+              reject(error);
+            }
+          },
+          access_type: 'offline',
+          prompt: 'consent',
+        });
+
+        client.requestAccessToken();
+      } catch (error) {
+        console.error('Error starting OAuth flow:', error);
+        reject(error);
+      }
+    });
+  }
+
+  // Upgrade existing configuration to include deletion permissions
+  async upgradeToModifyPermissions(configId: string, userId: string): Promise<GmailAuthCredentials> {
+    try {
+      console.log('[upgradeToModifyPermissions] Upgrading permissions for config:', configId);
+      
+      // Start OAuth flow with modify scopes
+      const credentials = await this.startOAuthFlowWithScopes(true);
+      
+      // Update the existing configuration with new credentials
+      await this.updateStoredToken(configId, credentials);
+      
+      console.log('[upgradeToModifyPermissions] Permissions upgraded successfully');
+      return credentials;
+      
+    } catch (error) {
+      console.error('[upgradeToModifyPermissions] Failed to upgrade permissions:', error);
+      throw new Error(`Failed to upgrade Gmail permissions: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // Update user's deletion preference and handle permission upgrade if needed
+  async updateDeletionPreference(
+    configId: string, 
+    userId: string, 
+    deleteAfterImport: boolean,
+    confirmationShown: boolean = false
+  ): Promise<{ success: boolean; requiresReauth?: boolean; message?: string }> {
+    try {
+      // If enabling deletion, check if we have the necessary permissions
+      if (deleteAfterImport) {
+        const credentials = await this.getCredentials(configId, userId);
+        if (!credentials) {
+          return {
+            success: false,
+            requiresReauth: true,
+            message: 'No valid credentials found. Please reconnect your Gmail account.'
+          };
+        }
+
+        const hasPermissions = await this.checkDeletionPermissions(credentials);
+        if (!hasPermissions) {
+          return {
+            success: false,
+            requiresReauth: true,
+            message: 'Additional Gmail permissions required for email deletion. Please re-authorize your account.'
+          };
+        }
+      }
+
+      // Update the database
+      const { error } = await supabase
+        .from('user_email_configs')
+        .update({
+          delete_after_import: deleteAfterImport,
+          deletion_confirmation_shown: confirmationShown
+        })
+        .eq('id', configId)
+        .eq('user_id', userId);
+
+      if (error) {
+        throw new Error(`Failed to update deletion preference: ${error.message}`);
+      }
+
+      return {
+        success: true,
+        message: deleteAfterImport 
+          ? 'Email deletion enabled successfully' 
+          : 'Email deletion disabled successfully'
+      };
+
+    } catch (error) {
+      console.error('[updateDeletionPreference] Error:', error);
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
     }
   }
 }

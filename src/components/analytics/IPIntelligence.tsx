@@ -6,7 +6,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ScatterChart, Scatter, Cell, PieChart, Pie } from "recharts";
 import { Globe, MapPin, Shield, AlertTriangle, TrendingUp, Users } from "lucide-react";
-import { classifyIPs, IPClassification, getIPLocation } from "@/utils/ipIntelligence";
+import { classifyIPs, IPClassification } from "@/utils/ipIntelligence";
+import { ipIntelligenceService, IPIntelligenceData } from "@/services/ipIntelligenceService";
 
 interface IPData {
   ip: string;
@@ -21,6 +22,14 @@ interface IPData {
   provider?: string | null;
   hostname?: string | null;
   confidence?: number;
+  // Enhanced threat intelligence
+  threatLevel?: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+  isVpn?: boolean;
+  isProxy?: boolean;
+  isTor?: boolean;
+  isHosting?: boolean;
+  cached?: boolean;
+  cacheAge?: number;
 }
 
 
@@ -100,20 +109,66 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
       const ipMap = new Map<string, any>();
       const countryMap = new Map<string, any>();
 
-      // Resolve unique IP geolocations with caching
+      // Resolve unique IP geolocations using the new batch service
       const uniqueIps = Array.from(new Set((records || []).map((r: any) => normalizeIP(r.source_ip as string))));
       console.log('Unique IPs found:', uniqueIps.length);
 
       const locMap = new Map<string, any>();
-      // Sequential fetch to be gentle with rate limits; cached hits are instant
-      for (const ip of uniqueIps) {
-        try {
-          const loc = await getIPLocation(ip);
-          locMap.set(ip, loc);
-        } catch (error) {
-          console.warn('Failed to get location for IP:', ip, error);
-          locMap.set(ip, { country: 'Unknown', city: null });
+      
+      try {
+        console.log('Fetching IP intelligence for', uniqueIps.length, 'unique IPs');
+        const batchResponse = await ipIntelligenceService.getIPIntelligenceBatch(uniqueIps);
+        
+        console.log('IP intelligence batch response:', {
+          success: batchResponse.success,
+          dataCount: batchResponse.data.length,
+          errors: batchResponse.errors,
+          metadata: batchResponse.metadata
+        });
+
+        // Map the response data to our location format
+        batchResponse.data.forEach((ipData: IPIntelligenceData) => {
+          locMap.set(ipData.ip_address, {
+            country: ipData.country || 'Unknown',
+            countryCode: ipData.country_code,
+            city: ipData.city,
+            region: ipData.region,
+            lat: ipData.latitude,
+            lon: ipData.longitude,
+            isp: ipData.isp,
+            org: ipData.organization,
+            // Additional intelligence data
+            threatLevel: ipData.threat_level,
+            isVpn: ipData.is_vpn,
+            isProxy: ipData.is_proxy,
+            isTor: ipData.is_tor,
+            isHosting: ipData.is_hosting,
+            provider: ipData.provider,
+            cached: ipData.cached,
+            cacheAge: ipData.cache_age_hours
+          });
+        });
+
+        // Fill in missing IPs with unknown data
+        uniqueIps.forEach(ip => {
+          if (!locMap.has(ip)) {
+            console.warn('No data received for IP:', ip);
+            locMap.set(ip, { country: 'Unknown', city: null });
+          }
+        });
+
+        // Log cache performance
+        if (batchResponse.metadata.cache_hits > 0 || batchResponse.metadata.cache_misses > 0) {
+          const hitRate = (batchResponse.metadata.cache_hits / (batchResponse.metadata.cache_hits + batchResponse.metadata.cache_misses) * 100).toFixed(1);
+          console.log(`Cache performance: ${batchResponse.metadata.cache_hits} hits, ${batchResponse.metadata.cache_misses} misses (${hitRate}% hit rate)`);
         }
+        
+      } catch (error) {
+        console.error('Failed to fetch IP intelligence batch:', error);
+        // Fallback to unknown data for all IPs
+        uniqueIps.forEach(ip => {
+          locMap.set(ip, { country: 'Unknown', city: null });
+        });
       }
 
       (records || []).forEach((record: any) => {
@@ -164,7 +219,9 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
       // Calculate risk scores and process data
       const processedIPs = Array.from(ipMap.values()).map(entry => {
         const cls = classMap.get(entry.ip);
+        const loc = locMap.get(entry.ip) || {};
         const isAuthorized = cls ? cls.authorized : false;
+        
         return {
           ip: entry.ip,
           emailCount: entry.emailCount,
@@ -175,9 +232,17 @@ const IPIntelligence = ({ selectedDomain }: IPIntelligenceProps) => {
           lastSeen: new Date(entry.lastSeen).toLocaleDateString(),
           isAuthorized,
           category: cls?.category,
-          provider: cls?.provider ?? null,
+          provider: cls?.provider ?? loc.provider ?? null,
           hostname: cls?.hostname ?? null,
           confidence: cls?.confidence,
+          // Enhanced threat intelligence from new service
+          threatLevel: loc.threatLevel || 'unknown',
+          isVpn: loc.isVpn || false,
+          isProxy: loc.isProxy || false,
+          isTor: loc.isTor || false,
+          isHosting: loc.isHosting || false,
+          cached: loc.cached,
+          cacheAge: loc.cacheAge,
         } as IPData;
       }).sort((a, b) => b.emailCount - a.emailCount);
 
