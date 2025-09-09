@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { 
   Mail, 
   Clock, 
@@ -33,6 +35,7 @@ export function SyncStatusIndicator({
   const { user } = useAuth();
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [deleteAfterImport, setDeleteAfterImport] = useState(config.delete_after_import ?? false);
   const [syncHistory, setSyncHistory] = useState<Array<{
     id: string;
     started_at: Date;
@@ -70,7 +73,8 @@ export function SyncStatusIndicator({
       setIsManualSyncing(true);
       setSyncProgress({ phase: 'searching', message: 'Starting sync...' });
 
-      const result = await emailProcessor.syncDmarcReports(
+      const { processGmailEmails } = await import('@/services/emailProcessor');
+      const result = await processGmailEmails(
         config.id,
         user.id,
         (progress) => setSyncProgress(progress)
@@ -151,6 +155,42 @@ export function SyncStatusIndicator({
     } finally {
       setIsManualSyncing(false);
       setSyncProgress(null);
+    }
+  };
+
+  const handleDeleteToggle = async (checked: boolean) => {
+    try {
+      const { supabase } = await import('@/integrations/supabase/client');
+      const { error } = await supabase
+        .from('user_email_configs')
+        .update({ delete_after_import: checked })
+        .eq('id', config.id);
+
+      if (error) {
+        console.error('Failed to update deletion setting:', error);
+        toast({
+          title: 'Settings Update Failed',
+          description: 'Could not update email deletion setting. Please try again.',
+          variant: 'destructive'
+        });
+        return;
+      }
+
+      setDeleteAfterImport(checked);
+      toast({
+        title: checked ? 'Email Deletion Enabled' : 'Email Deletion Disabled',
+        description: checked 
+          ? 'Emails will be deleted after successful DMARC report processing.'
+          : 'Emails will be kept after DMARC report processing.',
+        variant: 'default'
+      });
+    } catch (error) {
+      console.error('Error updating deletion setting:', error);
+      toast({
+        title: 'Settings Update Failed',
+        description: 'An unexpected error occurred. Please try again.',
+        variant: 'destructive'
+      });
     }
   };
 
@@ -237,6 +277,18 @@ export function SyncStatusIndicator({
           progressType: 'determinate',
           stageDescription: 'Sync encountered an error'
         };
+      case 'deleting': {
+        const totalToDelete = progress.processed || 1;
+        const deleted = progress.deleted || 0;
+        const percentage = (deleted / totalToDelete) * 100;
+        
+        return {
+          showPercentage: true,
+          percentage: Math.min(percentage, 100),
+          progressType: 'determinate',
+          stageDescription: `Stage 4: Deleting processed emails (${deleted}/${totalToDelete})`
+        };
+      }
       default:
         return {
           showPercentage: false,
@@ -368,6 +420,27 @@ export function SyncStatusIndicator({
             <RefreshCw className={`w-4 h-4 mr-2 ${isManualSyncing ? 'animate-spin' : ''}`} />
             {isManualSyncing ? 'Syncing...' : 'Sync Now'}
           </Button>
+        </div>
+
+        {/* Email Deletion Setting */}
+        <div className="flex items-center space-x-2 pt-2 border-t border-gray-100">
+          <Checkbox
+            id={`delete-toggle-${config.id}`}
+            checked={deleteAfterImport}
+            onCheckedChange={handleDeleteToggle}
+            disabled={isManualSyncing || config.sync_status === 'syncing' || !config.is_active}
+          />
+          <Label
+            htmlFor={`delete-toggle-${config.id}`}
+            className="text-sm text-gray-700 cursor-pointer"
+          >
+            Delete emails after importing DMARC reports
+          </Label>
+          {deleteAfterImport && (
+            <Badge variant="outline" className="text-xs border-orange-200 text-orange-700">
+              Destructive
+            </Badge>
+          )}
         </div>
 
         {/* Enhanced Sync History with Detailed Statistics */}

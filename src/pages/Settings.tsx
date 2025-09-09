@@ -22,6 +22,7 @@ import { EmailConfigModal, SyncStatusIndicator } from "@/components/EmailSync";
 import { useEmailSync } from "@/hooks/useEmailSync";
 import { useAuth } from "@/hooks/useAuth";
 import { gmailAuthService } from "@/services/gmailAuth";
+import { TokenMigration } from "@/components/Migration/TokenMigration";
 import { Link } from "react-router-dom";
 
 const Settings = () => {
@@ -82,6 +83,9 @@ const Settings = () => {
           Refresh
         </Button>
       </div>
+
+      {/* Token Migration */}
+      <TokenMigration />
 
       {/* Gmail Connection Status */}
       {configs.length === 0 && (

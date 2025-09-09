@@ -1,12 +1,6 @@
 import { GoogleAuth } from 'google-auth-library';
 import { supabase } from '@/integrations/supabase/client';
-import { 
-  encryptToken, 
-  decryptToken, 
-  isEncryptionSupported, 
-  clearEncryptionKey,
-  getEncryptionKeyStatus 
-} from '@/utils/encryption';
+import { sessionEncryption } from '@/utils/sessionEncryption';
 
 // Gmail API scopes needed for reading emails and optional email deletion
 const GMAIL_SCOPES_READ_ONLY = [
@@ -166,21 +160,17 @@ class GmailAuthService {
 
   // Save email configuration to database
   async saveEmailConfig(credentials: GmailAuthCredentials, userId: string): Promise<string> {
-    if (!isEncryptionSupported()) {
-      throw new Error('Encryption not supported in this browser');
+    if (!sessionEncryption.isSupported()) {
+      throw new Error('Session encryption not supported in this browser');
     }
 
     try {
-      console.log('[saveEmailConfig] Starting to save Gmail credentials for user:', userId);
+      console.log('[saveEmailConfig] Saving Gmail credentials with session-based encryption');
       
-      // Ensure encryption key is stored in database for this user
-      // The encryptToken function will handle this automatically, but we log it for verification
-      console.log('[saveEmailConfig] Encryption system will ensure database key storage during token encryption');
-      
-      // Encrypt the access token before storing
-      const encryptedAccessToken = await encryptToken(credentials.access_token);
+      // Encrypt tokens using session-derived keys
+      const encryptedAccessToken = await sessionEncryption.encryptToken(credentials.access_token);
       const encryptedRefreshToken = credentials.refresh_token 
-        ? await encryptToken(credentials.refresh_token) 
+        ? await sessionEncryption.encryptToken(credentials.refresh_token)
         : null;
 
       const { data, error } = await supabase
@@ -197,7 +187,7 @@ class GmailAuthService {
           auto_sync_enabled: true,
           delete_after_import: false,
           deletion_confirmation_shown: false,
-          sync_unread_only: true // Default to unread-only as recommended
+          sync_unread_only: true
         }, {
           onConflict: 'user_id,provider,email_address'
         })
@@ -277,14 +267,10 @@ class GmailAuthService {
 
   // Update stored token with new credentials
   async updateStoredToken(configId: string, credentials: GmailAuthCredentials): Promise<void> {
-    if (!isEncryptionSupported()) {
-      throw new Error('Encryption not supported in this browser');
-    }
-
     try {
-      const encryptedAccessToken = await encryptToken(credentials.access_token);
+      const encryptedAccessToken = await sessionEncryption.encryptToken(credentials.access_token);
       const encryptedRefreshToken = credentials.refresh_token 
-        ? await encryptToken(credentials.refresh_token) 
+        ? await sessionEncryption.encryptToken(credentials.refresh_token)
         : null;
 
       const { error } = await supabase
@@ -300,9 +286,9 @@ class GmailAuthService {
         throw new Error(`Failed to update stored token: ${error.message}`);
       }
       
-      console.log('Token successfully refreshed and updated in database');
+      console.log('[updateStoredToken] Token successfully updated');
     } catch (error) {
-      console.error('Error updating stored token:', error);
+      console.error('[updateStoredToken] Error:', error);
       throw error;
     }
   }
@@ -330,7 +316,7 @@ class GmailAuthService {
   // Get decrypted credentials for a config with automatic token refresh and corruption handling
   async getCredentials(configId: string, userId: string): Promise<GmailAuthCredentials | null> {
     try {
-      console.log(`[getCredentials] Fetching credentials for config: ${configId}, user: ${userId}`);
+      console.log(`[getCredentials] Fetching credentials for config: ${configId}`);
       
       const { data, error } = await supabase
         .from('user_email_configs')
@@ -340,42 +326,37 @@ class GmailAuthService {
         .single();
 
       if (error || !data) {
-        console.log('[getCredentials] No credentials found for config:', configId);
+        console.log('[getCredentials] No credentials found');
         return null;
       }
 
-      console.log(`[getCredentials] Found credentials for ${data.email_address}`);
-
-      // Try to decrypt tokens with comprehensive error handling
+      // Decrypt tokens using session-derived keys
       let access_token: string;
       let refresh_token: string | undefined;
 
       try {
-        console.log('[getCredentials] Attempting to decrypt access token...');
-        access_token = await decryptToken(data.access_token);
+        access_token = await sessionEncryption.decryptToken(data.access_token);
         console.log('[getCredentials] Access token decrypted successfully');
       } catch (decryptError) {
         console.error('[getCredentials] Failed to decrypt access token:', decryptError);
         
-        // If decryption fails, the tokens are corrupted and unusable
-        await this.cleanupCorruptedCredentials(
-          configId, 
-          `Access token decryption failed: ${decryptError instanceof Error ? decryptError.message : 'Unknown error'}`
-        );
+        if (decryptError instanceof Error) {
+          if (decryptError.message === 'SESSION_EXPIRED') {
+            throw new Error('Session expired, please re-authenticate');
+          }
+          if (decryptError.message === 'DECRYPTION_FAILED') {
+            throw new Error('Token decryption failed, please re-authenticate');
+          }
+        }
         
-        return null; // This will trigger re-authentication
+        return null;
       }
 
       if (data.refresh_token) {
         try {
-          console.log('[getCredentials] Attempting to decrypt refresh token...');
-          refresh_token = await decryptToken(data.refresh_token);
-          console.log('[getCredentials] Refresh token decrypted successfully');
+          refresh_token = await sessionEncryption.decryptToken(data.refresh_token);
         } catch (decryptError) {
-          console.error('[getCredentials] Failed to decrypt refresh token:', decryptError);
-          
-          // If refresh token fails but access token works, we can continue with limited functionality
-          console.warn('[getCredentials] Continuing without refresh token (will need re-auth when access token expires)');
+          console.warn('[getCredentials] Failed to decrypt refresh token, continuing without it');
           refresh_token = undefined;
         }
       }
@@ -390,36 +371,21 @@ class GmailAuthService {
         credentials.refresh_token = refresh_token;
       }
 
-      // Check if token is expired or will expire soon (5 minutes buffer)
+      // Check if token needs refresh (5 minute buffer)
       const now = new Date();
-      const expiryBuffer = 5 * 60 * 1000; // 5 minutes in milliseconds
-      const isExpired = credentials.expires_at && (credentials.expires_at.getTime() - now.getTime()) < expiryBuffer;
+      const expiryBuffer = 5 * 60 * 1000;
+      const isExpired = credentials.expires_at && 
+        (credentials.expires_at.getTime() - now.getTime()) < expiryBuffer;
 
       if (isExpired && credentials.refresh_token) {
-        console.log('Token expired or expiring soon, refreshing...', {
-          expires_at: credentials.expires_at,
-          now: now,
-          time_until_expiry: credentials.expires_at ? credentials.expires_at.getTime() - now.getTime() : 'no expiry set'
-        });
-        
-        try {
-          const refreshedCredentials = await this.refreshAccessToken(credentials.refresh_token);
-          await this.updateStoredToken(configId, refreshedCredentials);
-          return refreshedCredentials;
-        } catch (refreshError) {
-          console.error('Failed to refresh token:', refreshError);
-          // Return null to indicate authentication failure
-          return null;
-        }
-      } else if (isExpired && !credentials.refresh_token) {
-        console.warn('Token expired but no refresh token available - user needs to re-authenticate');
-        return null;
+        console.log('[getCredentials] Token expired, refreshing...');
+        return await this.refreshTokenForConfig(configId, userId);
       }
 
       return credentials;
     } catch (error) {
-      console.error('Error getting credentials:', error);
-      return null;
+      console.error('[getCredentials] Error:', error);
+      throw error;
     }
   }
 
@@ -489,7 +455,7 @@ class GmailAuthService {
         return null;
       }
 
-      const refreshToken = await decryptToken(data.refresh_token);
+      const refreshToken = await sessionEncryption.decryptToken(data.refresh_token);
       const refreshedCredentials = await this.refreshAccessToken(refreshToken);
       await this.updateStoredToken(configId, refreshedCredentials);
       
@@ -536,25 +502,18 @@ class GmailAuthService {
     }
   }
 
-  // Clear all encryption keys (useful for troubleshooting)
-  async clearAllEncryptionKeys(): Promise<void> {
-    console.log('[GmailAuth] Clearing all encryption keys - this will require users to re-authenticate');
-    await clearEncryptionKey();
+  // Get encryption status for debugging
+  getEncryptionStatus(): { supported: boolean; migrationNeeded: boolean } {
+    const hasLegacyKeys = localStorage.getItem('dmarc_session_encryption_key') || 
+                         localStorage.getItem('dmarc_encryption_key');
+    
+    return {
+      supported: sessionEncryption.isSupported(),
+      migrationNeeded: !!hasLegacyKeys
+    };
   }
 
-  // Get encryption key status for debugging
-  async getEncryptionStatus(): Promise<{
-    hasSessionKey: boolean;
-    hasLegacyKey: boolean;
-    hasDatabaseKeys: boolean;
-    sessionKeyPreview: string;
-    databaseKeyCount: number;
-    userId: string | null;
-  }> {
-    return await getEncryptionKeyStatus();
-  }
-
-  // Force re-authentication by clearing credentials and encryption keys
+  // Force re-authentication by clearing credentials
   async forceReauthentication(userId: string): Promise<void> {
     try {
       console.log('[forceReauthentication] Forcing re-authentication for user:', userId);
@@ -569,36 +528,14 @@ class GmailAuthService {
         console.warn('[forceReauthentication] Failed to delete email configs:', deleteError);
       }
       
-      // Clear encryption keys
-      await clearEncryptionKey();
+      // Clear legacy keys
+      localStorage.removeItem('dmarc_session_encryption_key');
+      localStorage.removeItem('dmarc_encryption_key');
       
       console.log('[forceReauthentication] Re-authentication forced successfully');
     } catch (error) {
       console.error('[forceReauthentication] Error during force re-authentication:', error);
       throw error;
-    }
-  }
-
-  // Migrate legacy localStorage tokens to database (called automatically by decryptToken)
-  async migrateLegacyTokens(userId: string): Promise<void> {
-    try {
-      console.log('[migrateLegacyTokens] Checking for legacy tokens to migrate for user:', userId);
-      
-      const legacyKey = localStorage.getItem('dmarc_encryption_key');
-      if (legacyKey) {
-        console.log('[migrateLegacyTokens] Found legacy key, attempting migration');
-        
-        // The new encryption system will handle this automatically
-        // Just trigger it by calling getEncryptionPassword
-        const { getEncryptionPassword } = await import('@/utils/encryption');
-        await getEncryptionPassword();
-        
-        console.log('[migrateLegacyTokens] Legacy key migration completed');
-      } else {
-        console.log('[migrateLegacyTokens] No legacy keys found');
-      }
-    } catch (error) {
-      console.warn('[migrateLegacyTokens] Migration failed:', error);
     }
   }
 

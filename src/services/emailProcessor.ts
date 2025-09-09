@@ -3,9 +3,10 @@ import { gmailAuthService } from './gmailAuth';
 import { parseDmarcXml } from '@/utils/dmarcParser';
 import { saveDmarcReport } from '@/utils/dmarcDatabase';
 import { supabase } from '@/integrations/supabase/client';
+import { enhancedEmailProcessor } from './enhancedEmailProcessor';
 
-// VERSION IDENTIFIER - Updated 2024-09-04 - Gzip Error Fallback
-console.log('[emailProcessor] Loading version 2024-09-04-gzip-fallback');
+// VERSION IDENTIFIER - Updated 2024-09-09 - Enhanced Processing with Deduplication
+console.log('[emailProcessor] Loading version 2024-09-09-enhanced-processing');
 
 export interface SyncProgress {
   phase: 'searching' | 'downloading' | 'processing' | 'completed' | 'error';
@@ -107,7 +108,7 @@ class EmailProcessor {
       // }
 
       // Search for DMARC reports
-      const searchResult = await gmailService.searchDmarcReports(credentials, 100, undefined, syncUnreadOnly);
+      const searchResult = await gmailService.searchDmarcReportsLegacy(credentials, 100, undefined, syncUnreadOnly);
       const messages = searchResult.messages;
 
       const emailTypeDescription = syncUnreadOnly ? 'unread DMARC emails' : 'potential DMARC emails';
@@ -778,13 +779,12 @@ class EmailProcessor {
         syncUnreadOnly = false;
       }
 
-      // Try to search for a small number of DMARC reports
-      const searchResult = await gmailService.searchDmarcReports(credentials, 5, undefined, syncUnreadOnly);
+      // Try to search for a small number of DMARC reports to test connection
+      const searchResult = await gmailService.searchDmarcReportsLegacy(credentials, 5, undefined, syncUnreadOnly);
       
-      const emailDescription = syncUnreadOnly ? 'unread DMARC emails' : 'potential DMARC emails';
       return {
         success: true,
-        message: `Connection successful! Found ${searchResult.messages.length} ${emailDescription}.`,
+        message: 'Gmail connection test successful! Your account is properly configured.',
         emailsFound: searchResult.messages.length
       };
 
@@ -798,3 +798,52 @@ class EmailProcessor {
 }
 
 export const emailProcessor = new EmailProcessor();
+
+/**
+ * Enhanced Gmail email processing with deduplication and incremental sync
+ * Recommended for new implementations
+ */
+export async function processGmailEmails(
+  configId: string,
+  userId: string,
+  onProgress?: (progress: any) => void,
+  isRetry: boolean = false
+): Promise<any> {
+  try {
+    // Use enhanced processor for better performance and deduplication
+    const result = await enhancedEmailProcessor.processEmails(configId, userId, onProgress);
+    
+    // Convert enhanced result to legacy format for compatibility
+    return {
+      success: result.success,
+      emailsFound: result.emailsFound,
+      emailsFetched: result.emailsProcessed,
+      attachmentsFound: result.emailsProcessed, // Approximation
+      reportsProcessed: result.reportsProcessed,
+      reportsSkipped: result.reportsSkipped,
+      emailsDeleted: result.emailsDeleted,
+      deletionEnabled: result.deletionEnabled,
+      deletionErrors: result.deletionErrors,
+      errors: result.errors,
+      duration: result.duration
+    };
+  } catch (error) {
+    console.error('Enhanced processing failed, falling back to legacy processor:', error);
+    
+    // Fall back to legacy processor if enhanced fails
+    return await emailProcessor.syncDmarcReports(configId, userId, onProgress, isRetry);
+  }
+}
+
+/**
+ * Legacy Gmail email processing (maintained for compatibility)
+ * Use processGmailEmails for new implementations
+ */
+export async function processGmailEmailsLegacy(
+  configId: string,
+  userId: string,
+  onProgress?: (progress: any) => void,
+  isRetry: boolean = false
+): Promise<any> {
+  return await emailProcessor.syncDmarcReports(configId, userId, onProgress, isRetry);
+}

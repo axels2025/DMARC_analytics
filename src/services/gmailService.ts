@@ -33,32 +33,77 @@ export interface DmarcAttachment {
   date: Date;
 }
 
+export interface EmailSearchOptions {
+  unreadOnly: boolean;
+  maxResults: number;
+  afterDate?: Date;
+  beforeDate?: Date;
+}
+
+export interface EmailSearchResult {
+  messages: GmailMessage[];
+  nextPageToken?: string;
+  totalEstimate: number;
+  query: string;
+}
+
 class GmailService {
   private baseUrl = 'https://www.googleapis.com/gmail/v1/users/me';
 
-  // Search for DMARC reports in Gmail
+  /**
+   * Build Gmail search query with proper filters
+   */
+  private buildSearchQuery(options: EmailSearchOptions): string {
+    const queryParts = [
+      'has:attachment',
+      '(subject:DMARC OR subject:"Report Domain" OR subject:"dmarc report" OR subject:"DMARC aggregate report")',
+      '(filename:xml OR filename:zip OR filename:gz)'
+    ];
+
+    // Add unread filter to query (more efficient than client-side filtering)
+    if (options.unreadOnly) {
+      queryParts.push('is:unread');
+    }
+
+    // Add date filters if specified
+    if (options.afterDate) {
+      const afterDateStr = options.afterDate.toISOString().split('T')[0].replace(/-/g, '/');
+      queryParts.push(`after:${afterDateStr}`);
+    }
+
+    if (options.beforeDate) {
+      const beforeDateStr = options.beforeDate.toISOString().split('T')[0].replace(/-/g, '/');
+      queryParts.push(`before:${beforeDateStr}`);
+    }
+
+    return queryParts.join(' ');
+  }
+
+  /**
+   * Search for DMARC reports with proper pagination support
+   */
   async searchDmarcReports(
     credentials: GmailAuthCredentials,
-    maxResults: number = 50,
-    pageToken?: string,
-    unreadOnly: boolean = false
-  ): Promise<{ messages: GmailMessage[]; nextPageToken?: string }> {
+    options: EmailSearchOptions,
+    pageToken?: string
+  ): Promise<EmailSearchResult> {
     try {
-      // Search query for DMARC reports
-      // Always search for ALL DMARC emails, then filter by unread status in code
-      // This approach is more reliable than using is:unread in the query
-      const queryParts = [
-        'has:attachment',
-        '(subject:DMARC OR subject:"Report Domain" OR subject:"dmarc report")',
-        '(filename:xml OR filename:zip OR filename:gz)'
-      ];
-
-      const query = queryParts.join(' ');
-
-      console.log(`[searchDmarcReports] Gmail search query: "${query}"`);
-      console.log(`[searchDmarcReports] Unread only: ${unreadOnly}`);
-
-      const searchUrl = `${this.baseUrl}/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}${pageToken ? `&pageToken=${pageToken}` : ''}`;
+      const query = this.buildSearchQuery(options);
+      
+      console.log(`[searchDmarcReports] Query: "${query}"`);
+      console.log(`[searchDmarcReports] Options:`, options);
+      
+      // Build URL with proper parameter preservation
+      const params = new URLSearchParams({
+        q: query,
+        maxResults: options.maxResults.toString()
+      });
+      
+      if (pageToken) {
+        params.append('pageToken', pageToken);
+      }
+      
+      const searchUrl = `${this.baseUrl}/messages?${params.toString()}`;
       
       const response = await fetch(searchUrl, {
         headers: {
@@ -69,7 +114,7 @@ class GmailService {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Gmail API error response:', {
+        console.error('Gmail API error:', {
           status: response.status,
           statusText: response.statusText,
           body: errorText
@@ -79,37 +124,101 @@ class GmailService {
 
       const data = await response.json();
       
-      // Get detailed message information for each result
-      const allMessages = await Promise.all(
-        (data.messages || []).map((msg: { id: string }) => 
-          this.getMessage(credentials, msg.id)
-        )
-      );
-
-      let filteredMessages = allMessages.filter(msg => msg !== null);
-
-      // Filter by unread status if requested (check labelIds for UNREAD)
-      if (unreadOnly) {
-        const unreadMessages = filteredMessages.filter(msg => {
-          // Check if message has 'UNREAD' label
-          const isUnread = msg?.labelIds?.includes('UNREAD') || false;
-          return isUnread;
-        });
-        
-        console.log(`[searchDmarcReports] Total DMARC emails found: ${filteredMessages.length}`);
-        console.log(`[searchDmarcReports] Unread DMARC emails: ${unreadMessages.length}`);
-        
-        filteredMessages = unreadMessages;
-      }
-
+      // Use batch requests for efficient message fetching
+      const messages = await this.getBatchMessages(credentials, data.messages || []);
+      
       return {
-        messages: filteredMessages,
-        nextPageToken: data.nextPageToken
+        messages,
+        nextPageToken: data.nextPageToken,
+        totalEstimate: data.resultSizeEstimate || 0,
+        query
       };
     } catch (error) {
       console.error('Error searching DMARC reports:', error);
       throw error;
     }
+  }
+
+  /**
+   * Efficiently fetch multiple messages using batch requests
+   */
+  private async getBatchMessages(
+    credentials: GmailAuthCredentials,
+    messageList: Array<{ id: string }>
+  ): Promise<GmailMessage[]> {
+    if (!messageList.length) return [];
+
+    // Process in batches of 10 for optimal performance
+    const BATCH_SIZE = 10;
+    const results: GmailMessage[] = [];
+    
+    for (let i = 0; i < messageList.length; i += BATCH_SIZE) {
+      const batch = messageList.slice(i, i + BATCH_SIZE);
+      
+      const batchPromises = batch.map(msg => 
+        this.getMessage(credentials, msg.id)
+      );
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults.filter(msg => msg !== null));
+    }
+    
+    return results;
+  }
+
+  /**
+   * Process all DMARC emails with proper pagination
+   */
+  async processAllDmarcEmails(
+    credentials: GmailAuthCredentials,
+    options: EmailSearchOptions,
+    onProgress?: (progress: { processed: number; total: number; message: string }) => void
+  ): Promise<GmailMessage[]> {
+    const allMessages: GmailMessage[] = [];
+    let pageToken: string | undefined;
+    let totalProcessed = 0;
+
+    do {
+      const result = await this.searchDmarcReports(credentials, options, pageToken);
+      allMessages.push(...result.messages);
+      totalProcessed += result.messages.length;
+      
+      onProgress?.({
+        processed: totalProcessed,
+        total: result.totalEstimate,
+        message: `Fetched ${totalProcessed} emails${result.totalEstimate > 0 ? ` of ~${result.totalEstimate}` : ''}...`
+      });
+      
+      pageToken = result.nextPageToken;
+      
+      // Safety check to prevent infinite loops
+      if (totalProcessed > 10000) {
+        console.warn('Reached safety limit of 10,000 emails');
+        break;
+      }
+    } while (pageToken);
+
+    console.log(`[processAllDmarcEmails] Total messages fetched: ${allMessages.length}`);
+    return allMessages;
+  }
+
+  // Legacy method for backward compatibility
+  async searchDmarcReportsLegacy(
+    credentials: GmailAuthCredentials,
+    maxResults: number = 50,
+    pageToken?: string,
+    unreadOnly: boolean = false
+  ): Promise<{ messages: GmailMessage[]; nextPageToken?: string }> {
+    const options: EmailSearchOptions = {
+      unreadOnly,
+      maxResults
+    };
+    
+    const result = await this.searchDmarcReports(credentials, options, pageToken);
+    return {
+      messages: result.messages,
+      nextPageToken: result.nextPageToken
+    };
   }
 
   // Test method to compare unread vs all DMARC emails
@@ -185,7 +294,16 @@ class GmailService {
   async extractDmarcAttachments(
     credentials: GmailAuthCredentials,
     messages: GmailMessage[]
+  ): Promise<DmarcAttachment[]>;
+  async extractDmarcAttachments(
+    credentials: GmailAuthCredentials,
+    message: GmailMessage
+  ): Promise<DmarcAttachment[]>;
+  async extractDmarcAttachments(
+    credentials: GmailAuthCredentials,
+    messageOrMessages: GmailMessage | GmailMessage[]
   ): Promise<DmarcAttachment[]> {
+    const messages = Array.isArray(messageOrMessages) ? messageOrMessages : [messageOrMessages];
     const attachments: DmarcAttachment[] = [];
 
     for (const message of messages) {
