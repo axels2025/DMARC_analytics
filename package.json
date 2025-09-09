@@ -12,6 +12,7 @@
     "test:macro": "node -e \"import('./src/utils/spfMacroValidation.ts').then(m => m.runValidation())\""
   },
   "dependencies": {
+    "@azure/msal-browser": "^4.22.0",
     "@hookform/resolvers": "^3.9.0",
     "@radix-ui/react-accordion": "^1.2.0",
     "@radix-ui/react-alert-dialog": "^1.1.1",

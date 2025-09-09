@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { useEmailSync } from "@/hooks/useEmailSync";
-import { GmailOAuthButton, EmailConfigModal } from "@/components/EmailSync";
+import { GmailOAuthButton, EnhancedEmailConfigModal } from "@/components/EmailSync";
 import {
   DropdownMenu,
   DropdownMenuContent,

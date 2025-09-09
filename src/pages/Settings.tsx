@@ -18,7 +18,7 @@ import {
   Info,
   ExternalLink
 } from "lucide-react";
-import { EmailConfigModal, SyncStatusIndicator } from "@/components/EmailSync";
+import { EmailConfigModal, EnhancedEmailConfigModal, SyncStatusIndicator } from "@/components/EmailSync";
 import { useEmailSync } from "@/hooks/useEmailSync";
 import { useAuth } from "@/hooks/useAuth";
 import { gmailAuthService } from "@/services/gmailAuth";
@@ -119,12 +119,12 @@ const Settings = () => {
                     Connect your Gmail account to automatically import DMARC reports from your email. 
                     We'll search for and process DMARC report attachments, saving you time and ensuring you never miss important data.
                   </p>
-                  <EmailConfigModal onConfigChange={loadConfigs}>
+                  <EnhancedEmailConfigModal onConfigChange={loadConfigs}>
                     <Button size="lg" className="bg-blue-600 hover:bg-blue-700">
                       <Mail className="w-5 h-5 mr-2" />
-                      Connect Gmail Account
+                      Connect Email Account
                     </Button>
-                  </EmailConfigModal>
+                  </EnhancedEmailConfigModal>
                   <div className="mt-4 flex items-center justify-center gap-2 text-sm text-blue-600">
                     <Shield className="w-4 h-4" />
                     <span>Secure OAuth 2.0 authentication • Read-only access</span>
@@ -204,12 +204,12 @@ const Settings = () => {
                 </Badge>
               )}
             </div>
-            <EmailConfigModal onConfigChange={loadConfigs}>
+            <EnhancedEmailConfigModal onConfigChange={loadConfigs}>
               <Button>
                 <Mail className="w-4 h-4 mr-2" />
                 Manage Email Accounts
               </Button>
-            </EmailConfigModal>
+            </EnhancedEmailConfigModal>
           </div>
         </CardContent>
       </Card>
@@ -239,12 +239,12 @@ const Settings = () => {
             <p className="text-gray-600 mb-4">
               Connect your Gmail account to automatically sync DMARC reports from your email.
             </p>
-            <EmailConfigModal onConfigChange={loadConfigs}>
+            <EnhancedEmailConfigModal onConfigChange={loadConfigs}>
               <Button>
                 <Mail className="w-4 h-4 mr-2" />
-                Connect Gmail Account
+                Connect Email Account
               </Button>
-            </EmailConfigModal>
+            </EnhancedEmailConfigModal>
           </CardContent>
         </Card>
       )}
@@ -352,13 +352,13 @@ const Settings = () => {
               </div>
             </Link>
             
-            <EmailConfigModal onConfigChange={loadConfigs}>
+            <EnhancedEmailConfigModal onConfigChange={loadConfigs}>
               <div className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-colors cursor-pointer">
                 <Mail className="w-8 h-8 text-gray-400 mb-2" />
                 <h3 className="font-medium text-gray-900">Email Integration</h3>
-                <p className="text-sm text-gray-600">Manage Gmail sync configuration</p>
+                <p className="text-sm text-gray-600">Manage email sync configuration</p>
               </div>
-            </EmailConfigModal>
+            </EnhancedEmailConfigModal>
           </div>
         </CardContent>
       </Card>

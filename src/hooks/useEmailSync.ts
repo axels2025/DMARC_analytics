@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from './useAuth';
 import { gmailAuthService, EmailConfig } from '@/services/gmailAuth';
-import { emailProcessor } from '@/services/emailProcessor';
+import { unifiedEmailService } from '@/services/emailProviderInterface';
+import { legacyEmailProcessor } from '@/services/legacyEmailProcessor';
 
 export function useEmailSync() {
   const { user } = useAuth();
@@ -9,7 +10,7 @@ export function useEmailSync() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load email configurations
+  // Load email configurations from all providers
   const loadConfigs = async () => {
     if (!user) {
       setConfigs([]);
@@ -17,20 +18,20 @@ export function useEmailSync() {
       return;
     }
 
-    // Check if Gmail is configured first
-    if (!gmailAuthService.isGmailConfigured()) {
-      console.warn('Gmail integration not configured, skipping config load');
-      setConfigs([]);
-      setLoading(false);
-      setError(null); // Don't treat this as an error
-      return;
-    }
-
     try {
       setLoading(true);
       setError(null);
-      const userConfigs = await gmailAuthService.getUserEmailConfigs(user.id);
+      
+      // Load configs from all configured providers using unified service
+      const userConfigs = await unifiedEmailService.getUserEmailConfigs(user.id);
       setConfigs(userConfigs);
+      
+      // If no configs found and Gmail is configured, still try legacy Gmail service for backwards compatibility
+      if (userConfigs.length === 0 && gmailAuthService.isGmailConfigured()) {
+        console.log('No unified configs found, trying legacy Gmail service...');
+        const gmailConfigs = await gmailAuthService.getUserEmailConfigs(user.id);
+        setConfigs(gmailConfigs);
+      }
     } catch (err) {
       console.error('Error loading email configs:', err);
       setError(err instanceof Error ? err.message : 'Failed to load email configurations');
@@ -81,15 +82,8 @@ export function useEmailSync() {
       return { success: false, message: 'User not authenticated' };
     }
 
-    if (!gmailAuthService.isGmailConfigured()) {
-      return { 
-        success: false, 
-        message: 'Gmail integration not configured. Please set VITE_GOOGLE_CLIENT_ID environment variable.' 
-      };
-    }
-
     try {
-      const result = await emailProcessor.testConnection(configId, user.id);
+      const result = await legacyEmailProcessor.testConnection(configId, user.id);
       return result;
     } catch (error) {
       return {
@@ -99,20 +93,15 @@ export function useEmailSync() {
     }
   };
 
-  // Trigger manual sync for a config
+  // Trigger manual sync for a config (works with any provider)
   const triggerSync = async (
     configId: string,
     onProgress?: (progress: any) => void
   ): Promise<boolean> => {
     if (!user) return false;
 
-    if (!gmailAuthService.isGmailConfigured()) {
-      console.error('Gmail integration not configured');
-      return false;
-    }
-
     try {
-      const result = await emailProcessor.syncDmarcReports(
+      const result = await legacyEmailProcessor.syncDmarcReports(
         configId,
         user.id,
         onProgress

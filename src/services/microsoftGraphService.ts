@@ -1,0 +1,945 @@
+import * as pako from 'pako';
+import JSZip from 'jszip';
+
+// VERSION IDENTIFIER - Microsoft Graph API Service v1.0
+console.log('[microsoftGraphService] Loading Microsoft Graph API Service v1.0');
+
+export interface MicrosoftCredentials {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  token_type?: string;
+  scope?: string;
+}
+
+export interface GraphMessage {
+  id: string;
+  conversationId: string;
+  subject?: string;
+  bodyPreview: string;
+  receivedDateTime: string;
+  sender?: {
+    emailAddress: {
+      name?: string;
+      address: string;
+    };
+  };
+  from?: {
+    emailAddress: {
+      name?: string;
+      address: string;
+    };
+  };
+  hasAttachments: boolean;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    contentType: string;
+    size: number;
+    isInline: boolean;
+    contentBytes?: string;
+  }>;
+  internetMessageHeaders?: Array<{
+    name: string;
+    value: string;
+  }>;
+}
+
+export interface DmarcAttachment {
+  filename: string;
+  data: string; // base64 encoded XML content
+  messageId: string;
+  date: Date;
+}
+
+export interface OutlookSearchOptions {
+  unreadOnly: boolean;
+  maxResults: number;
+  afterDate?: Date;
+  beforeDate?: Date;
+}
+
+export interface EmailSearchResult {
+  messages: GraphMessage[];
+  nextPageToken?: string;
+  totalEstimate: number;
+  query: string;
+}
+
+class MicrosoftGraphService {
+  private baseUrl = 'https://graph.microsoft.com/v1.0/me';
+
+  /**
+   * Build Microsoft Graph search filter with proper OData filters
+   */
+  private buildSearchFilter(options: OutlookSearchOptions): string {
+    const filters: string[] = [];
+    
+    // Base filter for emails with attachments
+    filters.push('hasAttachments eq true');
+    
+    // Subject filters for DMARC reports
+    const subjectFilters = [
+      "contains(subject,'DMARC')",
+      "contains(subject,'Report Domain')", 
+      "contains(subject,'dmarc report')",
+      "contains(subject,'DMARC aggregate report')"
+    ];
+    filters.push(`(${subjectFilters.join(' or ')})`);
+    
+    // Add unread filter
+    if (options.unreadOnly) {
+      filters.push('isRead eq false');
+    }
+    
+    // Add date filters if specified
+    if (options.afterDate) {
+      const afterDateStr = options.afterDate.toISOString();
+      filters.push(`receivedDateTime ge ${afterDateStr}`);
+    }
+    
+    if (options.beforeDate) {
+      const beforeDateStr = options.beforeDate.toISOString();
+      filters.push(`receivedDateTime le ${beforeDateStr}`);
+    }
+    
+    return filters.join(' and ');
+  }
+
+  /**
+   * Search for DMARC reports with proper pagination support
+   */
+  async searchDmarcReports(
+    credentials: MicrosoftCredentials,
+    options: OutlookSearchOptions,
+    pageToken?: string
+  ): Promise<EmailSearchResult> {
+    try {
+      const filter = this.buildSearchFilter(options);
+      
+      console.log(`[searchDmarcReports] Filter: "${filter}"`);
+      console.log(`[searchDmarcReports] Options:`, options);
+      
+      // Build URL with proper OData parameters
+      const params = new URLSearchParams({
+        '$filter': filter,
+        '$top': options.maxResults.toString(),
+        '$select': 'id,conversationId,subject,bodyPreview,receivedDateTime,sender,from,hasAttachments,internetMessageHeaders',
+        '$orderby': 'receivedDateTime desc'
+      });
+      
+      if (pageToken) {
+        params.append('$skip', pageToken);
+      }
+      
+      const searchUrl = `${this.baseUrl}/messages?${params.toString()}`;
+      
+      const response = await fetch(searchUrl, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Microsoft Graph API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        throw new Error(`Microsoft Graph API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Fetch detailed message information with attachments
+      const messages = await this.getBatchMessagesWithAttachments(credentials, data.value || []);
+      
+      // Calculate next page token (Microsoft Graph uses skip-based pagination)
+      const nextPageToken = data['@odata.nextLink'] ? 
+        String(parseInt(pageToken || '0') + options.maxResults) : 
+        undefined;
+      
+      return {
+        messages,
+        nextPageToken,
+        totalEstimate: data.value?.length || 0,
+        query: filter
+      };
+    } catch (error) {
+      console.error('Error searching DMARC reports:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Efficiently fetch multiple messages with attachments using batch requests
+   */
+  private async getBatchMessagesWithAttachments(
+    credentials: MicrosoftCredentials,
+    messageList: GraphMessage[]
+  ): Promise<GraphMessage[]> {
+    if (!messageList.length) return [];
+
+    // Process in batches of 10 for optimal performance
+    const BATCH_SIZE = 10;
+    const results: GraphMessage[] = [];
+    
+    for (let i = 0; i < messageList.length; i += BATCH_SIZE) {
+      const batch = messageList.slice(i, i + BATCH_SIZE);
+      
+      const batchPromises = batch.map(msg => 
+        this.getMessageWithAttachments(credentials, msg.id)
+      );
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults.filter(msg => msg !== null));
+    }
+    
+    return results;
+  }
+
+  /**
+   * Process all DMARC emails with proper pagination
+   */
+  async processAllDmarcEmails(
+    credentials: MicrosoftCredentials,
+    options: OutlookSearchOptions,
+    onProgress?: (progress: { processed: number; total: number; message: string }) => void
+  ): Promise<GraphMessage[]> {
+    const allMessages: GraphMessage[] = [];
+    let pageToken: string | undefined;
+    let totalProcessed = 0;
+
+    do {
+      const result = await this.searchDmarcReports(credentials, options, pageToken);
+      allMessages.push(...result.messages);
+      totalProcessed += result.messages.length;
+      
+      onProgress?.({
+        processed: totalProcessed,
+        total: result.totalEstimate,
+        message: `Fetched ${totalProcessed} emails${result.totalEstimate > 0 ? ` of ~${result.totalEstimate}` : ''}...`
+      });
+      
+      pageToken = result.nextPageToken;
+      
+      // Safety check to prevent infinite loops
+      if (totalProcessed > 10000) {
+        console.warn('Reached safety limit of 10,000 emails');
+        break;
+      }
+    } while (pageToken);
+
+    console.log(`[processAllDmarcEmails] Total messages fetched: ${allMessages.length}`);
+    return allMessages;
+  }
+
+  // Legacy method for backward compatibility
+  async searchDmarcReportsLegacy(
+    credentials: MicrosoftCredentials,
+    maxResults: number = 50,
+    pageToken?: string,
+    unreadOnly: boolean = false
+  ): Promise<{ messages: GraphMessage[]; nextPageToken?: string }> {
+    const options: OutlookSearchOptions = {
+      unreadOnly,
+      maxResults
+    };
+    
+    const result = await this.searchDmarcReports(credentials, options, pageToken);
+    return {
+      messages: result.messages,
+      nextPageToken: result.nextPageToken
+    };
+  }
+
+  // Test method to compare unread vs all DMARC emails
+  async testUnreadVsAllSearch(credentials: MicrosoftCredentials): Promise<{
+    allEmails: number;
+    unreadEmails: number;
+    allQuery: string;
+    unreadQuery: string;
+  }> {
+    const baseFilter = "hasAttachments eq true and (contains(subject,'DMARC') or contains(subject,'Report Domain') or contains(subject,'dmarc report'))";
+    const unreadFilter = `${baseFilter} and isRead eq false`;
+    
+    try {
+      // Search all DMARC emails
+      const allParams = new URLSearchParams({
+        '$filter': baseFilter,
+        '$top': '100',
+        '$select': 'id'
+      });
+      
+      const allResponse = await fetch(`${this.baseUrl}/messages?${allParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Search unread DMARC emails
+      const unreadParams = new URLSearchParams({
+        '$filter': unreadFilter,
+        '$top': '100',
+        '$select': 'id'
+      });
+      
+      const unreadResponse = await fetch(`${this.baseUrl}/messages?${unreadParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const allData = await allResponse.json();
+      const unreadData = await unreadResponse.json();
+      
+      console.log('[testUnreadVsAllSearch] All DMARC emails filter:', baseFilter);
+      console.log('[testUnreadVsAllSearch] Unread DMARC emails filter:', unreadFilter);
+      console.log('[testUnreadVsAllSearch] All results:', allData.value?.length || 0);
+      console.log('[testUnreadVsAllSearch] Unread results:', unreadData.value?.length || 0);
+      
+      return {
+        allEmails: allData.value?.length || 0,
+        unreadEmails: unreadData.value?.length || 0,
+        allQuery: baseFilter,
+        unreadQuery: unreadFilter
+      };
+    } catch (error) {
+      console.error('Error testing unread vs all search:', error);
+      throw error;
+    }
+  }
+
+  // Get detailed message information with attachments
+  private async getMessageWithAttachments(credentials: MicrosoftCredentials, messageId: string): Promise<GraphMessage | null> {
+    try {
+      // Get message details
+      const messageParams = new URLSearchParams({
+        '$select': 'id,conversationId,subject,bodyPreview,receivedDateTime,sender,from,hasAttachments,internetMessageHeaders'
+      });
+      
+      const messageResponse = await fetch(`${this.baseUrl}/messages/${messageId}?${messageParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!messageResponse.ok) {
+        console.warn(`Failed to get message ${messageId}: ${messageResponse.status}`);
+        return null;
+      }
+
+      const message: GraphMessage = await messageResponse.json();
+      
+      // Get attachments if the message has them
+      if (message.hasAttachments) {
+        const attachmentsResponse = await fetch(`${this.baseUrl}/messages/${messageId}/attachments`, {
+          headers: {
+            'Authorization': `Bearer ${credentials.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (attachmentsResponse.ok) {
+          const attachmentsData = await attachmentsResponse.json();
+          message.attachments = attachmentsData.value || [];
+        }
+      }
+
+      return message;
+    } catch (error) {
+      console.error(`Error getting message ${messageId}:`, error);
+      return null;
+    }
+  }
+
+  // Extract DMARC attachments from Graph messages
+  async extractDmarcAttachments(
+    credentials: MicrosoftCredentials,
+    messages: GraphMessage[]
+  ): Promise<DmarcAttachment[]>;
+  async extractDmarcAttachments(
+    credentials: MicrosoftCredentials,
+    message: GraphMessage
+  ): Promise<DmarcAttachment[]>;
+  async extractDmarcAttachments(
+    credentials: MicrosoftCredentials,
+    messageOrMessages: GraphMessage | GraphMessage[]
+  ): Promise<DmarcAttachment[]> {
+    const messages = Array.isArray(messageOrMessages) ? messageOrMessages : [messageOrMessages];
+    const attachments: DmarcAttachment[] = [];
+
+    for (const message of messages) {
+      try {
+        const messageAttachments = await this.getMessageAttachments(credentials, message);
+        attachments.push(...messageAttachments);
+      } catch (error) {
+        console.warn(`Failed to extract attachments from message ${message.id}:`, error);
+      }
+    }
+
+    return attachments;
+  }
+
+  // Get attachments from a specific message
+  private async getMessageAttachments(
+    credentials: MicrosoftCredentials,
+    message: GraphMessage
+  ): Promise<DmarcAttachment[]> {
+    const attachments: DmarcAttachment[] = [];
+
+    if (!message.hasAttachments || !message.attachments) {
+      return attachments;
+    }
+
+    const messageDate = new Date(message.receivedDateTime);
+
+    // Process each attachment
+    for (const attachment of message.attachments) {
+      if (this.isDmarcFile(attachment.name)) {
+        // Download attachment content if not already included
+        let attachmentData = attachment.contentBytes;
+        
+        if (!attachmentData) {
+          const downloadedAttachment = await this.downloadAttachment(
+            credentials,
+            message.id,
+            attachment.id
+          );
+          attachmentData = downloadedAttachment?.contentBytes;
+        }
+
+        if (attachmentData) {
+          attachments.push({
+            filename: attachment.name,
+            data: attachmentData,
+            messageId: message.id,
+            date: messageDate
+          });
+        }
+      }
+    }
+
+    return attachments;
+  }
+
+  // Download attachment from Microsoft Graph
+  private async downloadAttachment(
+    credentials: MicrosoftCredentials,
+    messageId: string,
+    attachmentId: string
+  ): Promise<{ contentBytes: string } | null> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/messages/${messageId}/attachments/${attachmentId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${credentials.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to download attachment: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      return {
+        contentBytes: data.contentBytes // This is base64 encoded
+      };
+    } catch (error) {
+      console.error(`Error downloading attachment ${attachmentId}:`, error);
+      return null;
+    }
+  }
+
+  // Check if file is likely a DMARC report
+  private isDmarcFile(filename: string): boolean {
+    const lowerFilename = filename.toLowerCase();
+    
+    console.log(`[isDmarcFile] Checking filename: ${lowerFilename}`);
+    
+    // Check for DMARC-related patterns in filename
+    const dmarcPatterns = [
+      'dmarc',
+      'report',
+      '.xml',
+      '.zip',
+      '.gz'
+    ];
+
+    const hasPattern = dmarcPatterns.some(pattern => lowerFilename.includes(pattern));
+    
+    // Common DMARC report filename patterns
+    const isStandardFormat = /^[\w\.-]+![\w\.-]+!\d+!\d+\.xml/.test(lowerFilename); // Standard format
+    const isCompressedFormat = /^[\w\.-]+![\w\.-]+!\d+!\d+\.xml\.(gz|gzip)$/.test(lowerFilename); // Compressed format
+    const isOutlookFormat = /outlook\.com!.*!\d+!\d+\.xml(\.gz)?$/.test(lowerFilename); // Microsoft Outlook format
+    const isDmarcNamed = /dmarc.*\.xml(\.gz|\.zip)?$/.test(lowerFilename);
+    const isReportNamed = /report.*domain.*\.xml(\.gz|\.zip)?$/.test(lowerFilename);
+    
+    const result = hasPattern || isStandardFormat || isCompressedFormat || isOutlookFormat || isDmarcNamed || isReportNamed;
+    
+    console.log(`[isDmarcFile] Analysis for ${lowerFilename}:`, {
+      hasPattern,
+      isStandardFormat,
+      isCompressedFormat,
+      isOutlookFormat,
+      isDmarcNamed,
+      isReportNamed,
+      finalResult: result
+    });
+    
+    return result;
+  }
+
+  // Helper method to properly decode URL-safe base64 to Uint8Array
+  private base64ToUint8Array(base64: string): Uint8Array {
+    try {
+      // Handle URL-safe base64: convert to regular base64
+      let regularBase64 = base64.replace(/-/g, '+').replace(/_/g, '/');
+      
+      // Add padding if needed
+      const padding = regularBase64.length % 4;
+      if (padding > 0) {
+        regularBase64 += '='.repeat(4 - padding);
+      }
+      
+      // Log for debugging
+      console.log(`Base64 decode: input length=${base64.length}, with padding length=${regularBase64.length}`);
+      
+      // Use modern approach with Uint8Array.from and atob
+      const binaryString = atob(regularBase64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      console.log(`Base64 decode: output ${bytes.length} bytes`);
+      return bytes;
+    } catch (error) {
+      console.error('Base64 decode error:', error);
+      throw new Error(`Failed to decode base64 data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // Validate XML content
+  private validateXmlContent(content: string, filename: string): void {
+    if (!content || typeof content !== 'string') {
+      throw new Error(`Invalid content: expected string, got ${typeof content}`);
+    }
+    
+    // Trim whitespace
+    content = content.trim();
+    
+    if (content.length === 0) {
+      throw new Error('Empty content after decoding');
+    }
+    
+    // Check if content starts with XML declaration or root element
+    if (!content.startsWith('<')) {
+      console.error(`Invalid XML content start for ${filename}:`, content.substring(0, 100));
+      throw new Error(`Content does not appear to be valid XML (doesn't start with '<')`);
+    }
+    
+    // Check for common XML patterns
+    if (!content.includes('<feedback>') && !content.includes('<report>') && !content.includes('<?xml')) {
+      console.warn(`Content for ${filename} may not be a DMARC report (missing expected XML elements)`);
+    }
+    
+    console.log(`XML validation passed for ${filename}: ${content.length} characters, starts with: ${content.substring(0, 50)}...`);
+  }
+
+  // FAILSAFE: Catch any "Compressed files not yet supported" errors from cached/old code
+  private handleLegacyCompressionError(filename: string, data: string): string[] {
+    console.warn(`[handleLegacyCompressionError] Intercepted legacy compression error for ${filename}`);
+    console.log(`[handleLegacyCompressionError] Attempting direct gzip decompression as fallback`);
+    
+    try {
+      // Try URL-safe base64 decoding
+      const uint8Array = this.base64ToUint8Array(data);
+      
+      if (filename.toLowerCase().endsWith('.gz') || filename.toLowerCase().endsWith('.gzip')) {
+        const decompressed = pako.inflate(uint8Array, { to: 'string' });
+        console.log(`[handleLegacyCompressionError] Fallback gzip decompression successful: ${decompressed.length} characters`);
+        return [decompressed];
+      }
+      
+      throw new Error('Fallback decompression failed - not a gzip file');
+    } catch (error) {
+      console.error(`[handleLegacyCompressionError] Fallback decompression failed:`, error);
+      throw new Error(`Legacy compression handling failed for ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  // Detect actual file type based on content signature
+  private detectFileTypeFromContent(uint8Array: Uint8Array, filename: string): 'zip' | 'gzip' | 'xml' | 'unknown' {
+    if (uint8Array.length < 4) {
+      console.log(`[detectFileTypeFromContent] File too small to detect type: ${uint8Array.length} bytes`);
+      return 'unknown';
+    }
+    
+    // Check for ZIP signature: "PK" (0x50 0x4B)
+    if (uint8Array[0] === 0x50 && uint8Array[1] === 0x4B) {
+      console.log(`[detectFileTypeFromContent] Detected ZIP file by signature (PK) for ${filename}`);
+      return 'zip';
+    }
+    
+    // Check for gzip signature: 0x1F 0x8B
+    if (uint8Array[0] === 0x1F && uint8Array[1] === 0x8B) {
+      console.log(`[detectFileTypeFromContent] Detected GZIP file by signature for ${filename}`);
+      return 'gzip';
+    }
+    
+    // Check if it starts with XML-like content
+    const textDecoder = new TextDecoder('utf-8', { fatal: false });
+    const preview = textDecoder.decode(uint8Array.slice(0, 100));
+    if (preview.trim().startsWith('<')) {
+      console.log(`[detectFileTypeFromContent] Detected XML file by content for ${filename}`);
+      return 'xml';
+    }
+    
+    console.log(`[detectFileTypeFromContent] Unknown file type for ${filename}, content preview:`, preview.substring(0, 50));
+    return 'unknown';
+  }
+
+  // Decompress attachment data if needed - returns array of XML content strings
+  async decompressAttachment(attachment: DmarcAttachment): Promise<string[]> {
+    const filename = attachment.filename.toLowerCase();
+    
+    try {
+      console.log(`[decompressAttachment] VERSION CHECK: Microsoft Graph Service v1.0 active`);
+      console.log(`[decompressAttachment] Processing attachment: ${filename}, base64 length: ${attachment.data.length}`);
+      
+      // Decode base64 using proper URL-safe decoding FIRST
+      const uint8Array = this.base64ToUint8Array(attachment.data);
+      console.log(`[decompressAttachment] Decoded ${uint8Array.length} bytes from base64 for ${filename}`);
+      
+      // SMART FILE TYPE DETECTION: Check actual content, not just filename
+      const actualFileType = this.detectFileTypeFromContent(uint8Array, filename);
+      const filenameBasedType = filename.endsWith('.gz') || filename.endsWith('.gzip') ? 'gzip' :
+                                filename.endsWith('.zip') ? 'zip' :
+                                filename.endsWith('.xml') ? 'xml' : 'unknown';
+      
+      console.log(`[decompressAttachment] File type analysis for ${filename}:`);
+      console.log(`[decompressAttachment] - Filename suggests: ${filenameBasedType}`);
+      console.log(`[decompressAttachment] - Content signature suggests: ${actualFileType}`);
+      
+      // Use content-based detection if it conflicts with filename
+      const finalFileType = actualFileType !== 'unknown' ? actualFileType : filenameBasedType;
+      console.log(`[decompressAttachment] - Final decision: ${finalFileType}`);
+      
+      // FAILSAFE CHECK: If this is a .gz file and we somehow got here, force gzip handling
+      if ((filename.endsWith('.gz') || filename.endsWith('.gzip') || finalFileType === 'gzip') && attachment.data) {
+        console.log(`[decompressAttachment] Processing as GZIP file`);
+        try {
+          const decompressed = pako.inflate(uint8Array, { to: 'string' });
+          console.log(`[decompressAttachment] Gzip decompression successful: ${decompressed.length} characters`);
+          this.validateXmlContent(decompressed, filename);
+          return [decompressed];
+        } catch (error) {
+          console.error(`[decompressAttachment] Gzip decompression failed:`, error);
+          throw new Error(`Gzip decompression failed for ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      // Handle ZIP files (including those misnamed as .xml)
+      if (filename.endsWith('.zip') || finalFileType === 'zip') {
+        console.log(`[decompressAttachment] Processing as ZIP archive`);
+        try {
+          const zip = await JSZip.loadAsync(uint8Array);
+          const xmlFiles: string[] = [];
+          
+          console.log(`[decompressAttachment] ZIP archive contains ${Object.keys(zip.files).length} files`);
+          
+          // Extract all XML files from the zip
+          for (const [entryFilename, file] of Object.entries(zip.files)) {
+            if (!file.dir && entryFilename.toLowerCase().endsWith('.xml')) {
+              try {
+                console.log(`[decompressAttachment] Extracting XML file: ${entryFilename}`);
+                const content = await file.async('string');
+                console.log(`[decompressAttachment] Extracted ${content.length} characters from ${entryFilename}`);
+                this.validateXmlContent(content, entryFilename);
+                xmlFiles.push(content);
+              } catch (error) {
+                console.warn(`[decompressAttachment] Failed to extract ${entryFilename} from ZIP:`, error);
+              }
+            }
+          }
+          
+          if (xmlFiles.length === 0) {
+            const allFiles = Object.keys(zip.files).join(', ');
+            throw new Error(`No XML files found in ZIP archive ${filename}. Found files: ${allFiles}`);
+          }
+          
+          console.log(`[decompressAttachment] Successfully extracted ${xmlFiles.length} XML files from ${filename}`);
+          return xmlFiles;
+        } catch (error) {
+          console.error(`[decompressAttachment] ZIP processing failed for ${filename}:`, error);
+          throw new Error(`Failed to decompress ZIP file ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      // Handle raw XML files (fallback for content-detected XML or files that passed content detection)
+      if (filename.endsWith('.xml') || finalFileType === 'xml') {
+        console.log(`[decompressAttachment] Processing as raw XML file`);
+        const textDecoder = new TextDecoder('utf-8');
+        const xmlContent = textDecoder.decode(uint8Array);
+        console.log(`[decompressAttachment] Raw XML file ${filename}: ${xmlContent.length} characters`);
+        this.validateXmlContent(xmlContent, filename);
+        return [xmlContent];
+      }
+      
+      console.error(`[decompressAttachment] Unsupported file format detected: ${filename}`);
+      console.error(`[decompressAttachment] File extension analysis: ${filename.substring(filename.lastIndexOf('.'))}`);
+      throw new Error(`Unsupported file format: ${filename}. Supported formats: .xml, .gz, .gzip, .zip`);
+    } catch (error) {
+      console.error(`[decompressAttachment] Error processing attachment ${filename}:`, error);
+      console.error(`[decompressAttachment] Attachment data preview:`, attachment.data.substring(0, 100) + '...');
+      throw error;
+    }
+  }
+
+  // Delete an email from Outlook with safety checks
+  async deleteEmail(
+    credentials: MicrosoftCredentials,
+    messageId: string,
+    emailMetadata?: {
+      subject?: string;
+      sender?: string;
+      dateReceived?: Date;
+      attachmentFilenames?: string[];
+    }
+  ): Promise<{
+    success: boolean;
+    deleted: boolean;
+    error?: string;
+    metadata?: any;
+  }> {
+    try {
+      console.log(`[deleteEmail] Attempting to delete email with ID: ${messageId}`);
+      
+      // Safety check: Verify this is a DMARC-related email before deletion
+      const message = await this.getMessageWithAttachments(credentials, messageId);
+      if (!message) {
+        return {
+          success: false,
+          deleted: false,
+          error: 'Could not retrieve email for safety verification'
+        };
+      }
+
+      // Safety check: Ensure email contains DMARC attachments
+      const messageAttachments = await this.getMessageAttachments(credentials, message);
+      const hasDmarcAttachments = messageAttachments.length > 0;
+      
+      if (!hasDmarcAttachments) {
+        console.warn(`[deleteEmail] Email ${messageId} has no DMARC attachments - skipping deletion for safety`);
+        return {
+          success: true,
+          deleted: false,
+          error: 'Email contains no DMARC attachments - deletion skipped for safety'
+        };
+      }
+
+      // Perform the deletion
+      const response = await fetch(`${this.baseUrl}/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[deleteEmail] Failed to delete email ${messageId}:`, {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        
+        return {
+          success: false,
+          deleted: false,
+          error: `Microsoft Graph API error: ${response.status} ${response.statusText}`
+        };
+      }
+
+      console.log(`[deleteEmail] Successfully deleted email ${messageId}`);
+      
+      // Extract metadata for audit trail
+      return {
+        success: true,
+        deleted: true,
+        metadata: {
+          subject: emailMetadata?.subject || message.subject || 'Unknown',
+          sender: emailMetadata?.sender || message.from?.emailAddress.address || message.sender?.emailAddress.address || 'Unknown',
+          dateReceived: emailMetadata?.dateReceived || new Date(message.receivedDateTime),
+          attachmentFilenames: emailMetadata?.attachmentFilenames || messageAttachments.map(a => a.filename)
+        }
+      };
+
+    } catch (error) {
+      console.error(`[deleteEmail] Error deleting email ${messageId}:`, error);
+      return {
+        success: false,
+        deleted: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  // Bulk delete emails with rate limiting and safety checks
+  async bulkDeleteEmails(
+    credentials: MicrosoftCredentials,
+    emailDeletions: Array<{
+      messageId: string;
+      processed: boolean; // Only delete if successfully processed
+      metadata?: {
+        subject?: string;
+        sender?: string;
+        dateReceived?: Date;
+        attachmentFilenames?: string[];
+      };
+    }>,
+    maxDeletionsPerSecond: number = 2
+  ): Promise<{
+    totalAttempted: number;
+    totalDeleted: number;
+    totalSkipped: number;
+    totalErrors: number;
+    deletedEmails: Array<{
+      messageId: string;
+      success: boolean;
+      deleted: boolean;
+      error?: string;
+      metadata?: any;
+    }>;
+  }> {
+    console.log(`[bulkDeleteEmails] Starting bulk deletion of ${emailDeletions.length} emails`);
+    
+    const results: Array<{
+      messageId: string;
+      success: boolean;
+      deleted: boolean;
+      error?: string;
+      metadata?: any;
+    }> = [];
+    
+    let totalDeleted = 0;
+    let totalSkipped = 0;
+    let totalErrors = 0;
+    
+    const delayBetweenRequests = Math.max(1000 / maxDeletionsPerSecond, 100); // At least 100ms
+    
+    for (let i = 0; i < emailDeletions.length; i++) {
+      const emailDeletion = emailDeletions[i];
+      
+      try {
+        // Safety check: Only delete emails that were successfully processed
+        if (!emailDeletion.processed) {
+          console.log(`[bulkDeleteEmails] Skipping deletion of ${emailDeletion.messageId} - not successfully processed`);
+          results.push({
+            messageId: emailDeletion.messageId,
+            success: true,
+            deleted: false,
+            error: 'Skipped - email not successfully processed'
+          });
+          totalSkipped++;
+          continue;
+        }
+        
+        const deleteResult = await this.deleteEmail(
+          credentials, 
+          emailDeletion.messageId,
+          emailDeletion.metadata
+        );
+        
+        results.push({
+          messageId: emailDeletion.messageId,
+          ...deleteResult
+        });
+        
+        if (deleteResult.success && deleteResult.deleted) {
+          totalDeleted++;
+        } else if (deleteResult.success && !deleteResult.deleted) {
+          totalSkipped++;
+        } else {
+          totalErrors++;
+        }
+        
+        // Rate limiting delay (except for last item)
+        if (i < emailDeletions.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+        }
+        
+      } catch (error) {
+        console.error(`[bulkDeleteEmails] Unexpected error deleting ${emailDeletion.messageId}:`, error);
+        results.push({
+          messageId: emailDeletion.messageId,
+          success: false,
+          deleted: false,
+          error: error instanceof Error ? error.message : 'Unexpected error'
+        });
+        totalErrors++;
+      }
+    }
+    
+    console.log(`[bulkDeleteEmails] Bulk deletion completed: ${totalDeleted} deleted, ${totalSkipped} skipped, ${totalErrors} errors`);
+    
+    return {
+      totalAttempted: emailDeletions.length,
+      totalDeleted,
+      totalSkipped,
+      totalErrors,
+      deletedEmails: results
+    };
+  }
+
+  // Get recent sync statistics with enhanced metrics (would need database integration)
+  async getSyncStats(configId: string): Promise<{
+    lastSync: Date | null;
+    totalSyncs: number;
+    recentSyncs: Array<{
+      date: Date;
+      emailsFound: number;
+      emailsFetched: number;
+      attachmentsFound: number;
+      reportsProcessed: number;
+      reportsSkipped: number;
+      emailsDeleted: number;
+      deletionEnabled: boolean;
+      duration: number | null;
+      status: string;
+      errorMessage?: string;
+    }>;
+  }> {
+    try {
+      // This would require Supabase integration like the Gmail service
+      // For now, return placeholder data
+      console.log(`[getSyncStats] Sync stats requested for config: ${configId}`);
+      
+      return {
+        lastSync: null,
+        totalSyncs: 0,
+        recentSyncs: []
+      };
+    } catch (error) {
+      console.error('Error getting sync stats:', error);
+      return {
+        lastSync: null,
+        totalSyncs: 0,
+        recentSyncs: []
+      };
+    }
+  }
+}
+
+export const microsoftGraphService = new MicrosoftGraphService();

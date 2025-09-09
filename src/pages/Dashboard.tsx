@@ -41,7 +41,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import InsightsModal from "@/components/InsightsModal";
 import ExportModal from "@/components/ExportModal";
-import { GmailOAuthButton, EmailConfigModal } from "@/components/EmailSync";
+import { GmailOAuthButton, EnhancedEmailConfigModal } from "@/components/EmailSync";
 import { useEmailSync } from "@/hooks/useEmailSync";
 
 const Dashboard = () => {

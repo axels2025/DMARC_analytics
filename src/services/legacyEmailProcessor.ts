@@ -1,32 +1,52 @@
-import { gmailService, DmarcAttachment } from './gmailService';
+import { unifiedEmailService, EmailProvider, getProviderFromConfig } from './emailProviderInterface';
 import { gmailAuthService } from './gmailAuth';
 import { parseDmarcXml } from '@/utils/dmarcParser';
 import { saveDmarcReport } from '@/utils/dmarcDatabase';
 import { supabase } from '@/integrations/supabase/client';
-import { enhancedEmailProcessor } from './enhancedEmailProcessor';
-import { SyncProgress, SyncResult } from '../types/emailSync';
 
-// VERSION IDENTIFIER - Updated 2024-09-09 - Enhanced Processing with Deduplication
-console.log('[emailProcessor] Loading version 2024-09-09-enhanced-processing');
 
-// Re-export types for backward compatibility
-export { SyncProgress, SyncResult };
+type ProgressCallback = (progress: { phase: 'searching' | 'downloading' | 'processing' | 'completed' | 'error'; message: string; emailsFound?: number; attachmentsFound?: number; processed?: number; skipped?: number; errors?: number; }) => void;
 
-type ProgressCallback = (progress: SyncProgress) => void;
-
-class EmailProcessor {
-  // Process DMARC reports from Gmail for a specific config
+// Backward-compatible email processor that automatically detects provider
+class LegacyEmailProcessor {
+  // Process DMARC reports for any provider (automatically detects Gmail/Microsoft)
   async syncDmarcReports(
     configId: string,
     userId: string,
     onProgress?: ProgressCallback,
     isRetry: boolean = false
-  ): Promise<SyncResult> {
+  ): Promise<{
+    success: boolean;
+    emailsFound: number;
+    emailsFetched: number;
+    attachmentsFound: number;
+    reportsProcessed: number;
+    reportsSkipped: number;
+    emailsDeleted: number;
+    deletionEnabled: boolean;
+    deletionErrors: number;
+    errors: string[];
+    duration: number;
+  }> {
     const startTime = Date.now();
     let syncLogId: string | null = null;
     
     try {
-      // Update config status to syncing
+      // Get config to determine provider
+      const { data: configData, error: configError } = await supabase
+        .from('user_email_configs')
+        .select('provider')
+        .eq('id', configId)
+        .eq('user_id', userId)
+        .single();
+
+      if (configError || !configData) {
+        throw new Error('Email configuration not found');
+      }
+
+      const provider = configData.provider as EmailProvider;
+      
+      // For backward compatibility, fall back to Gmail auth service for sync status updates
       await gmailAuthService.updateSyncStatus(configId, 'syncing');
       
       // Create sync log entry
@@ -34,27 +54,24 @@ class EmailProcessor {
       
       onProgress?.({
         phase: 'searching',
-        message: 'Getting Gmail credentials...'
+        message: `Getting ${provider} credentials...`
       });
 
-      // Get credentials (this now handles automatic token refresh and corruption recovery)
-      const credentials = await gmailAuthService.getCredentials(configId, userId);
+      // Get credentials using unified service
+      const credentials = await unifiedEmailService.getCredentials(configId, userId, provider);
       if (!credentials) {
         console.warn('[syncDmarcReports] No valid credentials found - likely need re-authentication');
-        throw new Error('Gmail authentication required. Please reconnect your Gmail account to continue syncing.');
+        throw new Error(`${provider} authentication required. Please reconnect your ${provider} account to continue syncing.`);
       }
 
-      console.log('Gmail credentials obtained:', {
+      console.log(`${provider} credentials obtained:`, {
         has_access_token: !!credentials.access_token,
         has_refresh_token: !!credentials.refresh_token,
         expires_at: credentials.expires_at,
         email: credentials.email
       });
 
-      // Debug: Check and update sync settings if needed (temporarily disabled)
-      // await gmailAuthService.debugAndUpdateSyncSettings(userId);
-
-      // Get config settings for search options (with fallback for missing columns)
+      // Get config settings for search options
       let syncUnreadOnly = false;
       try {
         const { data: configSettings, error } = await supabase
@@ -64,11 +81,11 @@ class EmailProcessor {
           .single();
         
         if (error && !error.message.includes('sync_unread_only')) {
-          throw error; // Re-throw non-column errors
+          throw error;
         }
         
         syncUnreadOnly = configSettings?.sync_unread_only ?? false;
-        console.log(`[emailProcessor] Retrieved sync_unread_only setting: ${syncUnreadOnly}`, configSettings);
+        console.log(`[legacyEmailProcessor] Retrieved sync_unread_only setting: ${syncUnreadOnly}`, configSettings);
       } catch (error) {
         console.warn('sync_unread_only column not available, defaulting to false');
         syncUnreadOnly = false;
@@ -76,24 +93,18 @@ class EmailProcessor {
 
       onProgress?.({
         phase: 'searching',
-        message: `Searching for DMARC reports in Gmail${syncUnreadOnly ? ' (unread emails only)' : ' (all emails)'}...`
+        message: `Searching for DMARC reports in ${provider}${syncUnreadOnly ? ' (unread emails only)' : ' (all emails)'}...`
       });
 
-      // Debug: Test unread vs all search to compare results (commented out to avoid infinite loops)
-      // try {
-      //   const testResults = await gmailService.testUnreadVsAllSearch(credentials);
-      //   console.log('[emailProcessor] Search comparison results:', testResults);
-      // } catch (error) {
-      //   console.warn('[emailProcessor] Failed to run search comparison:', error);
-      // }
-
-      // Search for DMARC reports
-      const searchResult = await gmailService.searchDmarcReportsLegacy(credentials, 100, undefined, syncUnreadOnly);
+      // Search for DMARC reports using unified service
+      const searchResult = await unifiedEmailService.searchDmarcReports(
+        credentials, 
+        { unreadOnly: syncUnreadOnly, maxResults: 100 }
+      );
       const messages = searchResult.messages;
 
       const emailTypeDescription = syncUnreadOnly ? 'unread DMARC emails' : 'potential DMARC emails';
       
-      // Add safety check for infinite loops
       if (messages.length === 0) {
         onProgress?.({
           phase: 'completed',
@@ -125,8 +136,8 @@ class EmailProcessor {
         emailsFound: messages.length
       });
 
-      // Extract attachments
-      const attachments = await gmailService.extractDmarcAttachments(credentials, messages);
+      // Extract attachments using unified service
+      const attachments = await unifiedEmailService.extractDmarcAttachments(credentials, messages);
 
       onProgress?.({
         phase: 'processing',
@@ -134,7 +145,7 @@ class EmailProcessor {
         attachmentsFound: attachments.length
       });
 
-      // Check if deletion is enabled for this config (with fallback for missing columns)
+      // Check if deletion is enabled for this config
       let deletionEnabled = false;
       try {
         const { data: configData, error } = await supabase
@@ -144,7 +155,7 @@ class EmailProcessor {
           .single();
         
         if (error && !error.message.includes('delete_after_import')) {
-          throw error; // Re-throw non-column errors
+          throw error;
         }
         
         deletionEnabled = configData?.delete_after_import || false;
@@ -173,7 +184,7 @@ class EmailProcessor {
         });
 
         try {
-          const deletionResult = await gmailService.bulkDeleteEmails(
+          const deletionResult = await unifiedEmailService.bulkDeleteEmails(
             credentials,
             eligibleEmails.map(email => ({
               messageId: email.messageId,
@@ -205,7 +216,7 @@ class EmailProcessor {
         }
       }
       
-      const result: SyncResult = {
+      const result = {
         success: true,
         emailsFound: messages.length,
         emailsFetched: messages.length,
@@ -250,9 +261,9 @@ class EmailProcessor {
         ` (including compressed .zip and .gz files)` : '';
         
       const emailDeletionMessage = result.emailsDeleted > 0 
-        ? `, deleted ${result.emailsDeleted} emails from Gmail` 
+        ? `, deleted ${result.emailsDeleted} emails from ${provider}` 
         : result.deletionEnabled 
-          ? `, left emails in Gmail` 
+          ? `, left emails in ${provider}` 
           : '';
       
       const syncModeMessage = syncUnreadOnly ? ' from unread emails' : '';
@@ -280,10 +291,10 @@ class EmailProcessor {
         });
 
         try {
+          // For backward compatibility, use Gmail auth service for token refresh
           const refreshedCredentials = await gmailAuthService.refreshTokenForConfig(configId, userId);
           if (refreshedCredentials) {
             console.log('Token refreshed successfully, retrying sync...');
-            // Retry the sync once with new token
             return await this.syncDmarcReports(configId, userId, onProgress, true);
           } else {
             console.log('Token refresh failed - user needs to re-authenticate');
@@ -311,10 +322,10 @@ class EmailProcessor {
       let finalErrorMessage = errorMessage;
       
       if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
-        finalErrorMessage = 'Gmail authentication expired. Please reconnect your account.';
+        finalErrorMessage = 'Authentication expired. Please reconnect your account.';
       } else if (errorMessage.includes('Failed to decrypt token') || errorMessage.includes('decryption failed')) {
-        finalErrorMessage = 'Gmail authentication corrupted. Please reconnect your Gmail account.';
-      } else if (errorMessage.includes('Gmail authentication required')) {
+        finalErrorMessage = 'Authentication corrupted. Please reconnect your account.';
+      } else if (errorMessage.includes('authentication required')) {
         finalErrorMessage = errorMessage; // Already user-friendly
       } else {
         finalErrorMessage = errorMessage;
@@ -343,7 +354,7 @@ class EmailProcessor {
 
   // Process multiple attachments with email tracking for deletion
   private async processAttachmentsWithTracking(
-    attachments: DmarcAttachment[],
+    attachments: any[],
     userId: string,
     onProgress?: ProgressCallback
   ): Promise<{ 
@@ -353,12 +364,7 @@ class EmailProcessor {
     processedEmails: Array<{
       messageId: string;
       processed: boolean;
-      metadata?: {
-        subject?: string;
-        sender?: string;
-        dateReceived?: Date;
-        attachmentFilenames?: string[];
-      };
+      metadata?: any;
     }>;
   }> {
     let processed = 0;
@@ -418,7 +424,6 @@ class EmailProcessor {
         }
 
         // Mark email as successfully processed if ALL its attachments were processed or skipped
-        // This means we can safely delete emails containing duplicate reports
         emailData.processed = emailData.successfulCount === emailData.attachmentCount;
 
       } catch (error) {
@@ -430,12 +435,6 @@ class EmailProcessor {
         const emailData = emailTracker.get(attachment.messageId);
         if (emailData) {
           emailData.processed = false; // Mark as failed to prevent deletion
-        }
-        
-        // Log additional details for XML parser errors specifically
-        if (error instanceof Error && error.message.includes('XML parser error')) {
-          console.error(`XML parsing failed for ${attachment.filename}. This is likely due to corrupted base64 decoding.`);
-          console.error(`Attachment size: ${attachment.data.length} characters`);
         }
       }
 
@@ -455,71 +454,16 @@ class EmailProcessor {
     return { processed, skipped, errors, processedEmails };
   }
 
-  // Process multiple attachments (legacy method for backward compatibility)
-  private async processAttachments(
-    attachments: DmarcAttachment[],
-    userId: string,
-    onProgress?: ProgressCallback
-  ): Promise<{ processed: number; skipped: number; errors: string[] }> {
-    const result = await this.processAttachmentsWithTracking(attachments, userId, onProgress);
-    return {
-      processed: result.processed,
-      skipped: result.skipped,
-      errors: result.errors
-    };
-  }
-
   // Process a single DMARC attachment (may contain multiple XML files)
   private async processSingleAttachment(
-    attachment: DmarcAttachment,
+    attachment: any,
     userId: string
   ): Promise<'processed' | 'skipped' | 'error'> {
     try {
-      // Decompress attachment - returns array of XML content strings
       console.log(`[processSingleAttachment] Processing attachment: ${attachment.filename}`);
-      console.log(`[processSingleAttachment] Calling gmailService.decompressAttachment for ${attachment.filename}`);
       
-      let xmlContents: string[];
-      
-      try {
-        xmlContents = await gmailService.decompressAttachment(attachment);
-      } catch (error) {
-        // FAILSAFE: Catch the "Compressed files not yet supported" error from cached code
-        if (error instanceof Error && error.message.includes('Compressed files not yet supported')) {
-          console.warn(`[processSingleAttachment] Detected legacy "Compressed files not yet supported" error for ${attachment.filename}`);
-          console.log(`[processSingleAttachment] Attempting direct fallback gzip decompression...`);
-          
-          // Try direct gzip decompression as fallback
-          if (attachment.filename.toLowerCase().endsWith('.gz') || attachment.filename.toLowerCase().endsWith('.gzip')) {
-            try {
-              // Import pako locally for fallback
-              const pako = await import('pako');
-              
-              // Basic base64 to Uint8Array conversion for fallback
-              const base64Data = attachment.data.replace(/-/g, '+').replace(/_/g, '/');
-              const padding = base64Data.length % 4;
-              const paddedBase64 = padding > 0 ? base64Data + '='.repeat(4 - padding) : base64Data;
-              
-              const binaryString = atob(paddedBase64);
-              const uint8Array = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i++) {
-                uint8Array[i] = binaryString.charCodeAt(i);
-              }
-              
-              const decompressed = pako.inflate(uint8Array, { to: 'string' });
-              console.log(`[processSingleAttachment] Fallback gzip decompression successful: ${decompressed.length} characters`);
-              xmlContents = [decompressed];
-            } catch (fallbackError) {
-              console.error(`[processSingleAttachment] Fallback gzip decompression failed:`, fallbackError);
-              throw new Error(`Both primary and fallback decompression failed for ${attachment.filename}: ${error.message}`);
-            }
-          } else {
-            throw error; // Re-throw if not a gzip file
-          }
-        } else {
-          throw error; // Re-throw other errors
-        }
-      }
+      // Decompress attachment using unified service
+      const xmlContents = await unifiedEmailService.decompressAttachment(attachment);
       
       console.log(`[processSingleAttachment] Successfully decompressed ${attachment.filename}, got ${xmlContents.length} XML content(s)`);
       
@@ -545,18 +489,11 @@ class EmailProcessor {
           const errorMsg = `Error processing XML ${i + 1} from ${attachment.filename}: ${error instanceof Error ? error.message : 'Unknown error'}`;
           errors.push(errorMsg);
           console.error(errorMsg, error);
-          
-          // Log XML content preview for debugging
-          if (xmlContent && typeof xmlContent === 'string') {
-            console.error(`XML content preview (first 200 chars): ${xmlContent.substring(0, 200)}...`);
-          }
         }
       }
 
-      // Log results for this attachment
       console.log(`Attachment ${attachment.filename}: processed ${processedCount}, skipped ${skippedCount}, errors ${errors.length}`);
 
-      // Return overall result - if any files were processed, consider it successful
       if (processedCount > 0) {
         return 'processed';
       } else if (skippedCount > 0 && errors.length === 0) {
@@ -579,7 +516,6 @@ class EmailProcessor {
   ): Promise<'processed' | 'skipped'> {
     try {
       console.log(`[processSingleReport] Processing ${xmlFilename}, XML content length: ${xmlContent.length} chars`);
-      console.log(`[processSingleReport] XML preview: ${xmlContent.substring(0, 200)}...`);
       
       // Parse DMARC XML
       const dmarcReport = await parseDmarcXml(xmlContent);
@@ -590,12 +526,6 @@ class EmailProcessor {
       }
       
       console.log(`[processSingleReport] Successfully parsed report with ID: ${dmarcReport.reportMetadata.reportId}`);
-      console.log(`[processSingleReport] Report org: ${dmarcReport.reportMetadata.orgName}`);
-      
-      // Validate report ID format (should not contain XML content)
-      if (dmarcReport.reportMetadata.reportId.includes('<') || dmarcReport.reportMetadata.reportId.includes('>')) {
-        throw new Error(`Invalid report ID format: contains XML characters: ${dmarcReport.reportMetadata.reportId.substring(0, 100)}`);
-      }
       
       // Check if report already exists to avoid duplicates
       try {
@@ -605,18 +535,16 @@ class EmailProcessor {
           .eq('user_id', userId)
           .eq('report_id', dmarcReport.reportMetadata.reportId)
           .eq('org_name', dmarcReport.reportMetadata.orgName)
-          .maybeSingle(); // Use maybeSingle instead of single to avoid errors when no results
+          .maybeSingle();
 
         if (duplicateError) {
           console.warn(`[processSingleReport] Duplicate check failed for ${dmarcReport.reportMetadata.reportId}: ${duplicateError.message}`);
-          // Continue processing - the database-level duplicate check will catch this if needed
         } else if (existingReport) {
           console.log(`Skipping duplicate report: ${dmarcReport.reportMetadata.reportId} from ${xmlFilename}`);
           return 'skipped';
         }
       } catch (duplicateCheckError) {
         console.warn(`[processSingleReport] Duplicate check error for ${dmarcReport.reportMetadata.reportId}:`, duplicateCheckError);
-        // Continue processing - the database-level duplicate check will catch this if needed
       }
 
       // Save to database
@@ -663,84 +591,48 @@ class EmailProcessor {
     }
   }
 
-  // Get sync history for a config
-  async getSyncHistory(configId: string, limit: number = 10): Promise<Array<{
-    id: string;
-    started_at: Date;
-    completed_at: Date | null;
-    status: string;
-    emails_found: number;
-    emails_fetched: number;
-    attachments_found: number;
-    reports_processed: number;
-    reports_skipped: number;
-    emails_deleted: number;
-    deletion_enabled: boolean;
-    errors_count: number;
-    error_message: string | null;
-    duration: number | null;
-  }>> {
-    try {
-      const { data, error } = await supabase
-        .from('email_sync_logs')
-        .select('*')
-        .eq('config_id', configId)
-        .order('sync_started_at', { ascending: false })
-        .limit(limit);
-
-      if (error) {
-        throw error;
-      }
-
-      return (data || []).map(log => ({
-        id: log.id,
-        started_at: new Date(log.sync_started_at),
-        completed_at: log.sync_completed_at ? new Date(log.sync_completed_at) : null,
-        status: log.status,
-        emails_found: log.emails_found || 0,
-        emails_fetched: log.emails_fetched || 0,
-        attachments_found: log.attachments_found || 0,
-        reports_processed: log.reports_processed || 0,
-        reports_skipped: log.reports_skipped || 0,
-        emails_deleted: log.emails_deleted || 0,
-        deletion_enabled: log.deletion_enabled || false,
-        errors_count: log.errors_count || 0,
-        error_message: log.error_message,
-        duration: log.sync_completed_at 
-          ? new Date(log.sync_completed_at).getTime() - new Date(log.sync_started_at).getTime()
-          : null
-      }));
-    } catch (error) {
-      console.error('Error getting sync history:', error);
-      return [];
-    }
-  }
-
-  // Test the connection and ability to find DMARC reports
+  // Test connection for any provider
   async testConnection(configId: string, userId: string): Promise<{
     success: boolean;
     message: string;
     emailsFound?: number;
   }> {
     try {
-      const credentials = await gmailAuthService.getCredentials(configId, userId);
+      // Get config to determine provider
+      const { data: configData, error: configError } = await supabase
+        .from('user_email_configs')
+        .select('provider')
+        .eq('id', configId)
+        .eq('user_id', userId)
+        .single();
+
+      if (configError || !configData) {
+        return {
+          success: false,
+          message: 'Email configuration not found'
+        };
+      }
+
+      const provider = configData.provider as EmailProvider;
+      
+      const credentials = await unifiedEmailService.getCredentials(configId, userId, provider);
       if (!credentials) {
         return {
           success: false,
-          message: 'Failed to get Gmail credentials'
+          message: `Failed to get ${provider} credentials`
         };
       }
 
-      // Test connection first
-      const connectionTest = await gmailAuthService.testConnection(configId, userId);
+      // Test connection
+      const connectionTest = await unifiedEmailService.testConnection(configId, userId, provider);
       if (!connectionTest) {
         return {
           success: false,
-          message: 'Gmail connection test failed. Please re-authenticate.'
+          message: `${provider} connection test failed. Please re-authenticate.`
         };
       }
 
-      // Get config settings for search options (with fallback for missing columns)
+      // Get config settings for search options
       let syncUnreadOnly = false;
       try {
         const { data: configSettings, error } = await supabase
@@ -750,7 +642,7 @@ class EmailProcessor {
           .single();
         
         if (error && !error.message.includes('sync_unread_only')) {
-          throw error; // Re-throw non-column errors
+          throw error;
         }
         
         syncUnreadOnly = configSettings?.sync_unread_only ?? false;
@@ -760,11 +652,14 @@ class EmailProcessor {
       }
 
       // Try to search for a small number of DMARC reports to test connection
-      const searchResult = await gmailService.searchDmarcReportsLegacy(credentials, 5, undefined, syncUnreadOnly);
+      const searchResult = await unifiedEmailService.searchDmarcReports(
+        credentials, 
+        { unreadOnly: syncUnreadOnly, maxResults: 5 }
+      );
       
       return {
         success: true,
-        message: 'Gmail connection test successful! Your account is properly configured.',
+        message: `${provider} connection test successful! Your account is properly configured.`,
         emailsFound: searchResult.messages.length
       };
 
@@ -777,53 +672,4 @@ class EmailProcessor {
   }
 }
 
-export const emailProcessor = new EmailProcessor();
-
-/**
- * Enhanced Gmail email processing with deduplication and incremental sync
- * Recommended for new implementations
- */
-export async function processGmailEmails(
-  configId: string,
-  userId: string,
-  onProgress?: (progress: any) => void,
-  isRetry: boolean = false
-): Promise<any> {
-  try {
-    // Use enhanced processor for better performance and deduplication
-    const result = await enhancedEmailProcessor.processEmails(configId, userId, onProgress);
-    
-    // Convert enhanced result to legacy format for compatibility
-    return {
-      success: result.success,
-      emailsFound: result.emailsFound,
-      emailsFetched: result.emailsProcessed,
-      attachmentsFound: result.emailsProcessed, // Approximation
-      reportsProcessed: result.reportsProcessed,
-      reportsSkipped: result.reportsSkipped,
-      emailsDeleted: result.emailsDeleted,
-      deletionEnabled: result.deletionEnabled,
-      deletionErrors: result.deletionErrors,
-      errors: result.errors,
-      duration: result.duration
-    };
-  } catch (error) {
-    console.error('Enhanced processing failed, falling back to legacy processor:', error);
-    
-    // Fall back to legacy processor if enhanced fails
-    return await emailProcessor.syncDmarcReports(configId, userId, onProgress, isRetry);
-  }
-}
-
-/**
- * Legacy Gmail email processing (maintained for compatibility)
- * Use processGmailEmails for new implementations
- */
-export async function processGmailEmailsLegacy(
-  configId: string,
-  userId: string,
-  onProgress?: (progress: any) => void,
-  isRetry: boolean = false
-): Promise<any> {
-  return await emailProcessor.syncDmarcReports(configId, userId, onProgress, isRetry);
-}
+export const legacyEmailProcessor = new LegacyEmailProcessor();

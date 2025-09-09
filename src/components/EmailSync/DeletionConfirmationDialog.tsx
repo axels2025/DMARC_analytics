@@ -27,6 +27,7 @@ interface DeletionConfirmationDialogProps {
   emailAddress: string;
   onConfirm: (confirmed: boolean, dontShowAgain: boolean) => void;
   loading?: boolean;
+  provider?: string; // Add provider prop for customization
 }
 
 const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
@@ -34,7 +35,8 @@ const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
   onOpenChange,
   emailAddress,
   onConfirm,
-  loading = false
+  loading = false,
+  provider = 'Gmail'
 }) => {
   const [understood, setUnderstood] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
@@ -73,7 +75,7 @@ const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
           <Alert className="border-red-200 bg-red-50">
             <AlertTriangle className="h-5 w-5 text-red-600" />
             <AlertDescription className="text-red-800">
-              <strong>Important:</strong> This will permanently delete emails from your Gmail inbox after DMARC reports are successfully imported.
+              <strong>Important:</strong> This will permanently delete emails from your {provider} inbox after DMARC reports are successfully imported.
             </AlertDescription>
           </Alert>
 
@@ -125,7 +127,7 @@ const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600" />
-                <span>Reduces Gmail storage usage</span>
+                <span>Reduces {provider} storage usage</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle className="w-4 h-4 text-green-600" />
@@ -163,8 +165,8 @@ const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
           <Alert>
             <Shield className="h-4 w-4" />
             <AlertDescription>
-              This feature requires additional Gmail permissions. You may need to re-authorize 
-              your Gmail account to grant email modification permissions.
+              This feature requires additional {provider} permissions. You may need to re-authorize 
+              your {provider} account to grant email modification permissions.
             </AlertDescription>
           </Alert>
 
@@ -180,7 +182,7 @@ const DeletionConfirmationDialog: React.FC<DeletionConfirmationDialogProps> = ({
                 htmlFor="understand-deletion"
                 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
               >
-                I understand that emails will be permanently deleted from my Gmail inbox after 
+                I understand that emails will be permanently deleted from my {provider} inbox after 
                 successful DMARC report import
               </label>
             </div>
