@@ -40,16 +40,23 @@ class GmailService {
   async searchDmarcReports(
     credentials: GmailAuthCredentials,
     maxResults: number = 50,
-    pageToken?: string
+    pageToken?: string,
+    unreadOnly: boolean = false
   ): Promise<{ messages: GmailMessage[]; nextPageToken?: string }> {
     try {
       // Search query for DMARC reports
-      // Common patterns: attachments with .xml, .zip, .gz extensions and DMARC-related subjects
-      const query = [
+      // Always search for ALL DMARC emails, then filter by unread status in code
+      // This approach is more reliable than using is:unread in the query
+      const queryParts = [
         'has:attachment',
-        '(filename:xml OR filename:zip OR filename:gz)',
-        '(subject:DMARC OR subject:"Report Domain" OR subject:"dmarc report" OR from:noreply-dmarc-support@google.com OR from:postmaster@yahoo.com OR from:dmarc-report@microsoft.com)'
-      ].join(' ');
+        '(subject:DMARC OR subject:"Report Domain" OR subject:"dmarc report")',
+        '(filename:xml OR filename:zip OR filename:gz)'
+      ];
+
+      const query = queryParts.join(' ');
+
+      console.log(`[searchDmarcReports] Gmail search query: "${query}"`);
+      console.log(`[searchDmarcReports] Unread only: ${unreadOnly}`);
 
       const searchUrl = `${this.baseUrl}/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}${pageToken ? `&pageToken=${pageToken}` : ''}`;
       
@@ -73,18 +80,81 @@ class GmailService {
       const data = await response.json();
       
       // Get detailed message information for each result
-      const messages = await Promise.all(
+      const allMessages = await Promise.all(
         (data.messages || []).map((msg: { id: string }) => 
           this.getMessage(credentials, msg.id)
         )
       );
 
+      let filteredMessages = allMessages.filter(msg => msg !== null);
+
+      // Filter by unread status if requested (check labelIds for UNREAD)
+      if (unreadOnly) {
+        const unreadMessages = filteredMessages.filter(msg => {
+          // Check if message has 'UNREAD' label
+          const isUnread = msg?.labelIds?.includes('UNREAD') || false;
+          return isUnread;
+        });
+        
+        console.log(`[searchDmarcReports] Total DMARC emails found: ${filteredMessages.length}`);
+        console.log(`[searchDmarcReports] Unread DMARC emails: ${unreadMessages.length}`);
+        
+        filteredMessages = unreadMessages;
+      }
+
       return {
-        messages: messages.filter(msg => msg !== null),
+        messages: filteredMessages,
         nextPageToken: data.nextPageToken
       };
     } catch (error) {
       console.error('Error searching DMARC reports:', error);
+      throw error;
+    }
+  }
+
+  // Test method to compare unread vs all DMARC emails
+  async testUnreadVsAllSearch(credentials: GmailAuthCredentials): Promise<{
+    allEmails: number;
+    unreadEmails: number;
+    allQuery: string;
+    unreadQuery: string;
+  }> {
+    const baseQuery = 'has:attachment (filename:xml OR filename:zip OR filename:gz) (subject:DMARC OR subject:"Report Domain" OR subject:"dmarc report")';
+    const unreadQuery = `is:unread ${baseQuery}`;
+    
+    try {
+      // Search all DMARC emails
+      const allResponse = await fetch(`${this.baseUrl}/messages?q=${encodeURIComponent(baseQuery)}&maxResults=100`, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Search unread DMARC emails  
+      const unreadResponse = await fetch(`${this.baseUrl}/messages?q=${encodeURIComponent(unreadQuery)}&maxResults=100`, {
+        headers: {
+          'Authorization': `Bearer ${credentials.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const allData = await allResponse.json();
+      const unreadData = await unreadResponse.json();
+      
+      console.log('[testUnreadVsAllSearch] All DMARC emails query:', baseQuery);
+      console.log('[testUnreadVsAllSearch] Unread DMARC emails query:', unreadQuery);
+      console.log('[testUnreadVsAllSearch] All results:', allData.messages?.length || 0);
+      console.log('[testUnreadVsAllSearch] Unread results:', unreadData.messages?.length || 0);
+      
+      return {
+        allEmails: allData.messages?.length || 0,
+        unreadEmails: unreadData.messages?.length || 0,
+        allQuery: baseQuery,
+        unreadQuery: unreadQuery
+      };
+    } catch (error) {
+      console.error('Error testing unread vs all search:', error);
       throw error;
     }
   }

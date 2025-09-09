@@ -34,9 +34,13 @@ export interface EmailConfig {
   provider: string;
   email_address: string;
   is_active: boolean;
+  delete_after_import?: boolean;
+  deletion_confirmation_shown?: boolean;
+  sync_unread_only?: boolean;
   last_sync_at: string | null;
   sync_status: string;
   auto_sync_enabled: boolean;
+  created_at: string;
 }
 
 class GmailAuthService {
@@ -190,7 +194,10 @@ class GmailAuthService {
           expires_at: credentials.expires_at?.toISOString(),
           sync_status: 'idle',
           is_active: true,
-          auto_sync_enabled: true
+          auto_sync_enabled: true,
+          delete_after_import: false,
+          deletion_confirmation_shown: false,
+          sync_unread_only: true // Default to unread-only as recommended
         }, {
           onConflict: 'user_id,provider,email_address'
         })
@@ -211,9 +218,12 @@ class GmailAuthService {
   // Get user's email configurations
   async getUserEmailConfigs(userId: string): Promise<EmailConfig[]> {
     try {
+      // Try to select new columns, fall back to old columns if they don't exist
+      let selectColumns = 'id, provider, email_address, is_active, last_sync_at, sync_status, auto_sync_enabled, created_at, delete_after_import, deletion_confirmation_shown, sync_unread_only';
+      
       const { data, error } = await supabase
         .from('user_email_configs')
-        .select('id, provider, email_address, is_active, last_sync_at, sync_status, auto_sync_enabled')
+        .select(selectColumns)
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
@@ -726,18 +736,28 @@ class GmailAuthService {
         }
       }
 
-      // Update the database
-      const { error } = await supabase
-        .from('user_email_configs')
-        .update({
-          delete_after_import: deleteAfterImport,
-          deletion_confirmation_shown: confirmationShown
-        })
-        .eq('id', configId)
-        .eq('user_id', userId);
+      // Update the database (handle missing columns gracefully)
+      try {
+        const { error } = await supabase
+          .from('user_email_configs')
+          .update({
+            delete_after_import: deleteAfterImport,
+            deletion_confirmation_shown: confirmationShown
+          })
+          .eq('id', configId)
+          .eq('user_id', userId);
 
-      if (error) {
-        throw new Error(`Failed to update deletion preference: ${error.message}`);
+        if (error) {
+          throw error;
+        }
+      } catch (updateError) {
+        // Handle missing columns
+        if (updateError instanceof Error && 
+            (updateError.message.includes('delete_after_import') || 
+             updateError.message.includes('deletion_confirmation_shown'))) {
+          throw new Error('This feature requires a database update. Please contact support to enable email deletion.');
+        }
+        throw updateError;
       }
 
       return {
@@ -753,6 +773,70 @@ class GmailAuthService {
         success: false,
         message: error instanceof Error ? error.message : 'Unknown error occurred'
       };
+    }
+  }
+
+  // Update sync unread only preference
+  async updateSyncUnreadOnly(configId: string, userId: string, syncUnreadOnly: boolean): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('user_email_configs')
+        .update({ sync_unread_only: syncUnreadOnly })
+        .eq('id', configId)
+        .eq('user_id', userId);
+
+      if (error) {
+        throw new Error(`Failed to update unread-only preference: ${error.message}`);
+      }
+    } catch (error) {
+      // Handle case where column doesn't exist yet
+      if (error instanceof Error && error.message.includes('sync_unread_only')) {
+        console.warn('sync_unread_only column does not exist yet. Migration needed.');
+        throw new Error('This feature requires a database update. Please contact support.');
+      }
+      throw error;
+    }
+  }
+
+  // Debug method to check and update user's sync settings
+  async debugAndUpdateSyncSettings(userId: string): Promise<void> {
+    try {
+      const { data, error } = await supabase
+        .from('user_email_configs')
+        .select('id, email_address, sync_unread_only, delete_after_import, deletion_confirmation_shown')
+        .eq('user_id', userId)
+        .eq('provider', 'gmail');
+
+      if (error) {
+        console.error('Error fetching config for debug:', error);
+        return;
+      }
+
+      console.log('[debugAndUpdateSyncSettings] Current user configs:', data);
+
+      // Update configs that don't have sync_unread_only set to true
+      for (const config of data || []) {
+        if (config.sync_unread_only === null || config.sync_unread_only === undefined) {
+          console.log(`[debugAndUpdateSyncSettings] Updating config ${config.id} to enable sync_unread_only`);
+          
+          const { error: updateError } = await supabase
+            .from('user_email_configs')
+            .update({
+              sync_unread_only: true,
+              delete_after_import: config.delete_after_import ?? false,
+              deletion_confirmation_shown: config.deletion_confirmation_shown ?? false
+            })
+            .eq('id', config.id);
+
+          if (updateError) {
+            console.error('Error updating config:', updateError);
+          } else {
+            console.log(`[debugAndUpdateSyncSettings] Successfully updated config ${config.id}`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[debugAndUpdateSyncSettings] Error:', error);
     }
   }
 }

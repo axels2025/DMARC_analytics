@@ -76,24 +76,47 @@ export function SyncStatusIndicator({
         (progress) => setSyncProgress(progress)
       );
 
-      // Show result
+      // Show user-friendly result
       if (result.success) {
-        const deletionMessage = result.emailsDeleted > 0 
-          ? `, deleted ${result.emailsDeleted} emails` 
-          : '';
+        let title = '✅ Sync Completed Successfully';
+        let description = '';
+        
+        if (result.reportsProcessed > 0 && result.emailsDeleted > 0) {
+          description = `Synced ${result.reportsProcessed} new reports and deleted ${result.emailsDeleted} emails from Gmail`;
+        } else if (result.reportsProcessed > 0) {
+          description = `Synced ${result.reportsProcessed} new reports (left emails in Gmail)`;
+        } else if (result.reportsSkipped > 0 && result.emailsDeleted > 0) {
+          description = `Found ${result.reportsSkipped} duplicate reports and cleaned up ${result.emailsDeleted} emails from Gmail`;
+        } else if (result.reportsSkipped > 0) {
+          description = `Found ${result.reportsSkipped} duplicate reports - your data is up to date`;
+        } else {
+          description = `No new DMARC reports found - your inbox is up to date`;
+        }
+        
         toast({
-          title: 'Sync Completed',
-          description: `Found ${result.emailsFound} emails, processed ${result.reportsProcessed} reports, skipped ${result.reportsSkipped} duplicates${deletionMessage}.`,
+          title,
+          description,
           variant: 'default'
         });
       } else {
-        const errorMessage = result.errors.length > 0 
-          ? result.errors.join('; ')
-          : 'Sync failed for unknown reasons. Please check your Gmail connection.';
+        let errorTitle = '⚠️ Gmail Sync Failed';
+        let errorDescription = '';
+        
+        const firstError = result.errors[0] || '';
+        
+        if (firstError.includes('Gmail authentication required') || firstError.includes('authentication expired')) {
+          errorTitle = '🔐 Authentication Required';
+          errorDescription = 'Your Gmail connection needs to be refreshed. Please reconnect your account.';
+        } else if (firstError.includes('connection')) {
+          errorTitle = '📡 Connection Issue';
+          errorDescription = 'Unable to connect to Gmail. Please check your internet connection and try again.';
+        } else {
+          errorDescription = firstError || 'An unexpected error occurred. Please try again or contact support if the issue persists.';
+        }
         
         toast({
-          title: 'Sync Failed',
-          description: errorMessage,
+          title: errorTitle,
+          description: errorDescription,
           variant: 'destructive'
         });
       }
@@ -103,12 +126,25 @@ export function SyncStatusIndicator({
       onSyncComplete?.();
 
     } catch (error) {
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : 'An unexpected error occurred during sync. Please try again.';
+      let errorTitle = '❌ Sync Error';
+      let errorMessage = '';
+      
+      if (error instanceof Error) {
+        if (error.message.includes('authentication') || error.message.includes('401') || error.message.includes('Unauthorized')) {
+          errorTitle = '🔐 Authentication Issue';
+          errorMessage = 'Your Gmail access has expired. Please reconnect your Gmail account to continue syncing.';
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorTitle = '📡 Network Error';
+          errorMessage = 'Unable to connect to Gmail. Please check your internet connection and try again.';
+        } else {
+          errorMessage = error.message;
+        }
+      } else {
+        errorMessage = 'An unexpected error occurred during sync. Please try again or contact support if the issue persists.';
+      }
       
       toast({
-        title: 'Sync Error',
+        title: errorTitle,
         description: errorMessage,
         variant: 'destructive'
       });
@@ -408,18 +444,40 @@ export function SyncStatusIndicator({
           </div>
         )}
 
-        {/* Error Message */}
+        {/* User-Friendly Error Message */}
         {config.sync_status === 'error' && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-md">
             <div className="flex">
               <AlertCircle className="w-4 h-4 text-red-600 mt-0.5 mr-2 flex-shrink-0" />
               <div className="text-sm text-red-800">
-                <p className="font-medium">Sync Error</p>
+                <p className="font-medium">
+                  {(config.last_error_message || '').includes('authentication') || 
+                   (config.last_error_message || '').includes('401') || 
+                   (config.last_error_message || '').includes('expired')
+                    ? '🔐 Gmail Connection Issue'
+                    : '⚠️ Sync Error'}
+                </p>
                 <p className="text-red-700 mt-1">
-                  {config.last_error_message || "There was an issue syncing your Gmail account. Try clicking 'Sync Now' to retry, or disconnect and reconnect your account if the problem persists."}
+                  {(() => {
+                    const error = config.last_error_message || '';
+                    if (error.includes('authentication') || error.includes('401') || error.includes('expired')) {
+                      return "Your Gmail connection has expired and needs to be refreshed. Please disconnect and reconnect your Gmail account to continue syncing.";
+                    } else if (error.includes('network') || error.includes('connection')) {
+                      return "Unable to connect to Gmail. Please check your internet connection and try again.";
+                    } else if (error.includes('permission') || error.includes('scope')) {
+                      return "Gmail permissions may have changed. Try reconnecting your account with the required permissions.";
+                    } else {
+                      return error || "There was an issue syncing your Gmail account. Try clicking 'Sync Now' to retry, or disconnect and reconnect your account if the problem persists.";
+                    }
+                  })()}
                 </p>
                 <p className="text-red-600 text-xs mt-2">
-                  <strong>Next steps:</strong> Click 'Sync Now' to retry, or use 'Test' to check your connection.
+                  <strong>Quick fix:</strong> 
+                  {(config.last_error_message || '').includes('authentication') || 
+                   (config.last_error_message || '').includes('401') || 
+                   (config.last_error_message || '').includes('expired')
+                    ? " Use 'Disconnect Gmail' button and reconnect your account."
+                    : " Click 'Sync Now' to retry, or use 'Test Connection' to check your Gmail access."}
                 </p>
               </div>
             </div>

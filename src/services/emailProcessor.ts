@@ -70,18 +70,77 @@ class EmailProcessor {
         email: credentials.email
       });
 
+      // Debug: Check and update sync settings if needed (temporarily disabled)
+      // await gmailAuthService.debugAndUpdateSyncSettings(userId);
+
+      // Get config settings for search options (with fallback for missing columns)
+      let syncUnreadOnly = false;
+      try {
+        const { data: configSettings, error } = await supabase
+          .from('user_email_configs')
+          .select('sync_unread_only')
+          .eq('id', configId)
+          .single();
+        
+        if (error && !error.message.includes('sync_unread_only')) {
+          throw error; // Re-throw non-column errors
+        }
+        
+        syncUnreadOnly = configSettings?.sync_unread_only ?? false;
+        console.log(`[emailProcessor] Retrieved sync_unread_only setting: ${syncUnreadOnly}`, configSettings);
+      } catch (error) {
+        console.warn('sync_unread_only column not available, defaulting to false');
+        syncUnreadOnly = false;
+      }
+
       onProgress?.({
         phase: 'searching',
-        message: 'Searching for DMARC reports in Gmail...'
+        message: `Searching for DMARC reports in Gmail${syncUnreadOnly ? ' (unread emails only)' : ' (all emails)'}...`
       });
 
+      // Debug: Test unread vs all search to compare results (commented out to avoid infinite loops)
+      // try {
+      //   const testResults = await gmailService.testUnreadVsAllSearch(credentials);
+      //   console.log('[emailProcessor] Search comparison results:', testResults);
+      // } catch (error) {
+      //   console.warn('[emailProcessor] Failed to run search comparison:', error);
+      // }
+
       // Search for DMARC reports
-      const searchResult = await gmailService.searchDmarcReports(credentials, 100);
+      const searchResult = await gmailService.searchDmarcReports(credentials, 100, undefined, syncUnreadOnly);
       const messages = searchResult.messages;
 
+      const emailTypeDescription = syncUnreadOnly ? 'unread DMARC emails' : 'potential DMARC emails';
+      
+      // Add safety check for infinite loops
+      if (messages.length === 0) {
+        onProgress?.({
+          phase: 'completed',
+          message: 'No DMARC emails found.',
+          emailsFound: 0,
+          processed: 0,
+          skipped: 0,
+          errors: 0
+        });
+        
+        return {
+          success: true,
+          emailsFound: 0,
+          emailsFetched: 0,
+          attachmentsFound: 0,
+          reportsProcessed: 0,
+          reportsSkipped: 0,
+          emailsDeleted: 0,
+          deletionEnabled: false,
+          deletionErrors: 0,
+          errors: [],
+          duration: Date.now() - startTime
+        };
+      }
+      
       onProgress?.({
         phase: 'downloading',
-        message: `Found ${messages.length} potential DMARC emails. Downloading attachments...`,
+        message: `Found ${messages.length} ${emailTypeDescription}. Downloading attachments...`,
         emailsFound: messages.length
       });
 
@@ -94,14 +153,24 @@ class EmailProcessor {
         attachmentsFound: attachments.length
       });
 
-      // Check if deletion is enabled for this config
-      const { data: configData } = await supabase
-        .from('user_email_configs')
-        .select('delete_after_import')
-        .eq('id', configId)
-        .single();
-      
-      const deletionEnabled = configData?.delete_after_import || false;
+      // Check if deletion is enabled for this config (with fallback for missing columns)
+      let deletionEnabled = false;
+      try {
+        const { data: configData, error } = await supabase
+          .from('user_email_configs')
+          .select('delete_after_import')
+          .eq('id', configId)
+          .single();
+        
+        if (error && !error.message.includes('delete_after_import')) {
+          throw error; // Re-throw non-column errors
+        }
+        
+        deletionEnabled = configData?.delete_after_import || false;
+      } catch (error) {
+        console.warn('delete_after_import column not available, defaulting to false');
+        deletionEnabled = false;
+      }
 
       // Process each attachment and track which emails were successfully processed
       const results = await this.processAttachmentsWithTracking(attachments, userId, onProgress);
@@ -199,11 +268,17 @@ class EmailProcessor {
       const compressionMessage = attachments.length > 0 ? 
         ` (including compressed .zip and .gz files)` : '';
         
-      const deletionMessage = result.emailsDeleted > 0 ? `, deleted ${result.emailsDeleted} emails` : '';
+      const emailDeletionMessage = result.emailsDeleted > 0 
+        ? `, deleted ${result.emailsDeleted} emails from Gmail` 
+        : result.deletionEnabled 
+          ? `, left emails in Gmail` 
+          : '';
+      
+      const syncModeMessage = syncUnreadOnly ? ' from unread emails' : '';
       
       onProgress?.({
         phase: 'completed',
-        message: `Sync completed! Processed ${result.reportsProcessed} reports${compressionMessage}, skipped ${result.reportsSkipped} duplicates${deletionMessage}.`,
+        message: `Sync completed! Processed ${result.reportsProcessed} reports${syncModeMessage}${compressionMessage}, skipped ${result.reportsSkipped} duplicates${emailDeletionMessage}.`,
         processed: result.reportsProcessed,
         skipped: result.reportsSkipped,
         errors: result.errors.length
@@ -684,12 +759,32 @@ class EmailProcessor {
         };
       }
 
+      // Get config settings for search options (with fallback for missing columns)
+      let syncUnreadOnly = false;
+      try {
+        const { data: configSettings, error } = await supabase
+          .from('user_email_configs')
+          .select('sync_unread_only')
+          .eq('id', configId)
+          .single();
+        
+        if (error && !error.message.includes('sync_unread_only')) {
+          throw error; // Re-throw non-column errors
+        }
+        
+        syncUnreadOnly = configSettings?.sync_unread_only ?? false;
+      } catch (error) {
+        console.warn('sync_unread_only column not available, defaulting to false in testConnection');
+        syncUnreadOnly = false;
+      }
+
       // Try to search for a small number of DMARC reports
-      const searchResult = await gmailService.searchDmarcReports(credentials, 5);
+      const searchResult = await gmailService.searchDmarcReports(credentials, 5, undefined, syncUnreadOnly);
       
+      const emailDescription = syncUnreadOnly ? 'unread DMARC emails' : 'potential DMARC emails';
       return {
         success: true,
-        message: `Connection successful! Found ${searchResult.messages.length} potential DMARC emails.`,
+        message: `Connection successful! Found ${searchResult.messages.length} ${emailDescription}.`,
         emailsFound: searchResult.messages.length
       };
 

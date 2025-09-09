@@ -6,15 +6,23 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Gmail,
   Settings,
-  Trash2,
   Shield,
   AlertTriangle,
   CheckCircle,
   Info,
   RefreshCw,
-  Mail
+  Mail,
+  Unlink
 } from 'lucide-react';
 import { EmailConfig } from '@/hooks/useEmailSync';
 import DeletionConfirmationDialog from './DeletionConfirmationDialog';
@@ -33,6 +41,7 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
   const { user } = useAuth();
   const [loading, setLoading] = useState<string | null>(null);
   const [showDeletionConfirm, setShowDeletionConfirm] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -49,10 +58,13 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
     
     try {
       await gmailAuthService.toggleConfigStatus(config.id, user.id, enabled);
-      setSuccess(`Gmail integration ${enabled ? 'enabled' : 'disabled'} successfully`);
+      setSuccess(enabled 
+        ? '✅ Gmail integration is now active and ready to sync' 
+        : '⏸️ Gmail integration paused - no automatic syncing'
+      );
       onConfigUpdate?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update config status');
+      setError(err instanceof Error ? err.message : 'Failed to update Gmail integration setting');
     } finally {
       setLoading(null);
     }
@@ -71,6 +83,26 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
       onConfigUpdate?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update auto-sync setting');
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleToggleUnreadOnly = async (enabled: boolean) => {
+    if (!user) return;
+    
+    setLoading('unreadonly');
+    clearMessages();
+    
+    try {
+      await gmailAuthService.updateSyncUnreadOnly(config.id, user.id, enabled);
+      setSuccess(enabled 
+        ? '📬 Now syncing unread emails only (recommended for cleaner inbox management)' 
+        : '📧 Now syncing all emails (may include previously processed reports)'
+      );
+      onConfigUpdate?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update email filtering preference');
     } finally {
       setLoading(null);
     }
@@ -104,13 +136,16 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
       );
 
       if (result.success) {
-        setSuccess(result.message || 'Deletion preference updated successfully');
+        setSuccess(result.message || (enabled 
+          ? '🗑️ Email deletion enabled - Gmail will be cleaned up after each sync' 
+          : '📧 Email deletion disabled - reports will stay in your Gmail inbox'
+        ));
         onConfigUpdate?.();
       } else if (result.requiresReauth) {
-        setError(result.message || 'Re-authentication required for email deletion permissions');
+        setError('🔐 Additional Gmail permissions required for email deletion. Please use "Upgrade Permissions" to enable this feature.');
         // Could trigger re-auth flow here
       } else {
-        setError(result.message || 'Failed to update deletion preference');
+        setError(result.message || 'Failed to update email cleanup preferences');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update deletion preference');
@@ -133,10 +168,15 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
     
     try {
       await gmailAuthService.upgradeToModifyPermissions(config.id, user.id);
-      setSuccess('Gmail permissions upgraded successfully! You can now enable email deletion.');
+      setSuccess('🔓 Gmail permissions upgraded successfully! You can now enable email deletion to keep your inbox clean.');
       onConfigUpdate?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to upgrade Gmail permissions');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to upgrade Gmail permissions';
+      if (errorMsg.includes('denied') || errorMsg.includes('permission')) {
+        setError('🚫 Permission upgrade was denied by user. Email deletion requires additional Gmail permissions to function safely.');
+      } else {
+        setError(`⚠️ Failed to upgrade Gmail permissions: ${errorMsg}`);
+      }
     } finally {
       setLoading(null);
     }
@@ -151,12 +191,39 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
     try {
       const result = await gmailAuthService.testConnection(config.id, user.id);
       if (result) {
-        setSuccess('Gmail connection test successful!');
+        setSuccess('✅ Gmail connection is working perfectly! Ready to sync DMARC reports.');
       } else {
-        setError('Gmail connection test failed. Please check your authentication.');
+        setError('❌ Gmail connection failed. Your authentication may have expired - try disconnecting and reconnecting your account.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection test failed');
+      const errorMsg = err instanceof Error ? err.message : 'Connection test failed';
+      if (errorMsg.includes('401') || errorMsg.includes('authentication') || errorMsg.includes('expired')) {
+        setError('🔐 Gmail authentication expired. Please disconnect and reconnect your account to restore access.');
+      } else {
+        setError(`📡 Connection test failed: ${errorMsg}`);
+      }
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleDisconnect = () => {
+    setShowDisconnectConfirm(true);
+  };
+
+  const handleConfirmDisconnect = async () => {
+    if (!user) return;
+    
+    setLoading('disconnect');
+    clearMessages();
+    setShowDisconnectConfirm(false);
+    
+    try {
+      await gmailAuthService.deleteEmailConfig(config.id, user.id);
+      setSuccess('✅ Gmail account disconnected successfully. You can reconnect anytime to resume syncing.');
+      onConfigUpdate?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to disconnect Gmail account. Please try again or contact support.');
     } finally {
       setLoading(null);
     }
@@ -255,41 +322,49 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
 
           <Separator />
 
-          {/* Email Deletion Settings */}
+          {/* Email Import Options */}
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold text-gray-900">Email Deletion Settings</h3>
-              <Badge variant="outline" className="text-xs">
-                Advanced
-              </Badge>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900">Email Import Options</h3>
+              {(config.sync_unread_only === undefined || config.delete_after_import === undefined) && (
+                <Badge variant="outline" className="text-xs bg-yellow-50 text-yellow-700 border-yellow-200">
+                  Requires Update
+                </Badge>
+              )}
             </div>
-
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertDescription>
-                Email deletion requires additional Gmail permissions. Emails will only be deleted 
-                after successful DMARC report import.
-              </AlertDescription>
-            </Alert>
+            
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <div className="font-medium">Only sync unread emails</div>
+                <div className="text-sm text-muted-foreground">
+                  Only import DMARC reports from unread emails (recommended for cleaner syncing)
+                </div>
+              </div>
+              <Switch
+                checked={config.sync_unread_only ?? true}
+                onCheckedChange={handleToggleUnreadOnly}
+                disabled={!config.is_active || loading === 'unreadonly'}
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                Database value: {config.sync_unread_only === undefined ? 'undefined' : String(config.sync_unread_only)}
+              </div>
+            </div>
 
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <div className="font-medium flex items-center gap-2">
-                  <Trash2 className="w-4 h-4 text-red-600" />
-                  Delete Emails After Import
-                </div>
+                <div className="font-medium">Delete emails after import</div>
                 <div className="text-sm text-muted-foreground">
                   Automatically delete emails from Gmail after successful DMARC report import
                 </div>
               </div>
               <Switch
-                checked={config.delete_after_import}
+                checked={config.delete_after_import ?? false}
                 onCheckedChange={handleDeletionToggle}
                 disabled={!config.is_active || loading === 'deletion'}
               />
             </div>
 
-            {config.delete_after_import && (
+            {(config.delete_after_import ?? false) && (
               <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
                 <div className="flex items-center gap-2 text-green-800">
                   <CheckCircle className="w-4 h-4" />
@@ -300,6 +375,15 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
                   All deletions are logged for audit purposes.
                 </p>
               </div>
+            )}
+
+            {(config.sync_unread_only === undefined || config.delete_after_import === undefined) && (
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertDescription>
+                  Some email import options require a database update. These settings will be available after the next system update.
+                </AlertDescription>
+              </Alert>
             )}
           </div>
 
@@ -337,6 +421,20 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
                 )}
                 Upgrade Permissions
               </Button>
+
+              <Button
+                variant="destructive"
+                onClick={handleDisconnect}
+                disabled={loading === 'disconnect'}
+                className="flex items-center gap-2"
+              >
+                {loading === 'disconnect' ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Unlink className="w-4 h-4" />
+                )}
+                Disconnect Gmail
+              </Button>
             </div>
           </div>
 
@@ -367,6 +465,42 @@ const GmailSettingsPanel: React.FC<GmailSettingsPanelProps> = ({
           )}
         </CardContent>
       </Card>
+
+      {/* Disconnect Confirmation Dialog */}
+      <Dialog open={showDisconnectConfirm} onOpenChange={setShowDisconnectConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disconnect Gmail Account</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to disconnect Gmail? You'll need to reconnect to sync future reports.
+              <br /><br />
+              This will disconnect <strong>{config.email_address}</strong> and remove all saved authentication data.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowDisconnectConfirm(false)}
+              disabled={loading === 'disconnect'}
+            >
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleConfirmDisconnect}
+              disabled={loading === 'disconnect'}
+              className="flex items-center gap-2"
+            >
+              {loading === 'disconnect' ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Unlink className="w-4 h-4" />
+              )}
+              Disconnect Gmail
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Deletion Confirmation Dialog */}
       <DeletionConfirmationDialog

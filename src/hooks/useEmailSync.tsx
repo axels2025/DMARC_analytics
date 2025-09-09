@@ -7,8 +7,9 @@ export interface EmailConfig {
   provider: string;
   email_address: string;
   is_active: boolean;
-  delete_after_import: boolean;
-  deletion_confirmation_shown: boolean;
+  delete_after_import?: boolean;
+  deletion_confirmation_shown?: boolean;
+  sync_unread_only?: boolean;
   sync_status: 'idle' | 'syncing' | 'completed' | 'error';
   last_sync_at: string | null;
   last_error_message: string | null;
