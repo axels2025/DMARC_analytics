@@ -2,8 +2,6 @@ import { gmailService, GmailMessage, DmarcAttachment as GmailDmarcAttachment, Em
 import { gmailAuthService, GmailAuthCredentials, EmailConfig } from './gmailAuth';
 import { microsoftGraphService, GraphMessage, DmarcAttachment as MicrosoftDmarcAttachment, OutlookSearchOptions, EmailSearchResult as MicrosoftSearchResult } from './microsoftGraphService';
 import { microsoftAuthService, MicrosoftAuthCredentials } from './microsoftAuthService';
-import { SyncProgress, SyncResult } from '../types/emailSync';
-
 // Unified EmailProvider enum
 export enum EmailProvider {
   GMAIL = 'gmail',
@@ -58,9 +56,6 @@ export interface UnifiedSearchResult {
   query: string;
   provider: EmailProvider;
 }
-
-// Re-export sync types
-export { SyncProgress, SyncResult };
 
 // Factory interface for creating provider-specific services
 interface EmailServiceFactory {

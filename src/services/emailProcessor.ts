@@ -9,8 +9,6 @@ import { SyncProgress, SyncResult } from '../types/emailSync';
 // VERSION IDENTIFIER - Updated 2024-09-09 - Enhanced Processing with Deduplication
 console.log('[emailProcessor] Loading version 2024-09-09-enhanced-processing');
 
-// Re-export types for backward compatibility
-export { SyncProgress, SyncResult };
 
 type ProgressCallback = (progress: SyncProgress) => void;
 

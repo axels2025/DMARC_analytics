@@ -16,7 +16,8 @@ import {
   Activity
 } from 'lucide-react';
 import { EmailConfig } from '@/services/gmailAuth';
-import { emailProcessor, SyncProgress } from '@/services/emailProcessor';
+import { emailProcessor } from '@/services/emailProcessor';
+import { SyncProgress } from '@/types/emailSync';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { format } from 'date-fns';
