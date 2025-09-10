@@ -67,7 +67,7 @@ interface EmailServiceFactory {
 export interface UnifiedAuthService {
   provider: EmailProvider;
   isConfigured(): boolean;
-  getConfigurationStatus(): { configured: boolean; message: string; instructions?: string };
+  getConfigurationStatus(): Promise<{ configured: boolean; message: string; instructions?: string }>;
   startOAuthFlow(): Promise<UnifiedCredentials>;
   saveEmailConfig(credentials: UnifiedCredentials, userId: string): Promise<string>;
   getUserEmailConfigs(userId: string): Promise<EmailConfig[]>;
@@ -102,7 +102,7 @@ class GmailAuthServiceWrapper implements UnifiedAuthService {
     return gmailAuthService.isGmailConfigured();
   }
 
-  getConfigurationStatus(): { configured: boolean; message: string; instructions?: string } {
+  async getConfigurationStatus(): Promise<{ configured: boolean; message: string; instructions?: string }> {
     return gmailAuthService.getConfigurationStatus();
   }
 
@@ -301,8 +301,8 @@ class MicrosoftAuthServiceWrapper implements UnifiedAuthService {
     return microsoftAuthService.isMicrosoftConfigured();
   }
 
-  getConfigurationStatus(): { configured: boolean; message: string; instructions?: string } {
-    return microsoftAuthService.getConfigurationStatus();
+  async getConfigurationStatus(): Promise<{ configured: boolean; message: string; instructions?: string }> {
+    return await microsoftAuthService.getConfigurationStatus();
   }
 
   async startOAuthFlow(): Promise<UnifiedCredentials> {
@@ -620,8 +620,8 @@ export class UnifiedEmailProviderService {
     return this.getAuthService(provider).isConfigured();
   }
 
-  getProviderConfigurationStatus(provider: EmailProvider): { configured: boolean; message: string; instructions?: string } {
-    return this.getAuthService(provider).getConfigurationStatus();
+  async getProviderConfigurationStatus(provider: EmailProvider): Promise<{ configured: boolean; message: string; instructions?: string }> {
+    return await this.getAuthService(provider).getConfigurationStatus();
   }
 
   // Get list of all supported providers

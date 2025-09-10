@@ -57,6 +57,12 @@ class MicrosoftAuthService {
     this.clientId = import.meta.env.VITE_MICROSOFT_CLIENT_ID || null;
     this.isConfigured = !!this.clientId;
     
+    // Add debug logging
+    console.log('🔍 Microsoft Auth Service Debug:');
+    console.log('Environment VITE_MICROSOFT_CLIENT_ID:', import.meta.env.VITE_MICROSOFT_CLIENT_ID);
+    console.log('Client ID set to:', this.clientId);
+    console.log('Is configured:', this.isConfigured);
+    
     if (!this.isConfigured) {
       console.warn('Microsoft integration not configured: VITE_MICROSOFT_CLIENT_ID environment variable is missing');
       // Will attempt to load from database in initializeFromDatabase()
@@ -67,7 +73,12 @@ class MicrosoftAuthService {
 
   // Initialize from database configuration (alternative to environment variables)
   async initializeFromDatabase(userId?: string): Promise<void> {
-    if (this.isConfigured) return; // Already configured
+    console.log('🔍 Attempting to load from database...');
+    
+    if (this.isConfigured) {
+      console.log('✅ Already configured, skipping database check');
+      return;
+    }
 
     try {
       // Query for Microsoft client configuration in database
@@ -77,19 +88,24 @@ class MicrosoftAuthService {
         .eq('key', 'oauth_settings')
         .single();
 
+      console.log('🔍 Database query result:', { data, error });
+
       if (error) {
-        console.log('No Microsoft client ID found in database configuration');
+        console.log('❌ Database error:', error);
         return;
       }
 
       if (data?.microsoft_client_id) {
+        console.log('✅ Found client ID in database:', data.microsoft_client_id.substring(0, 8) + '...');
         this.clientId = data.microsoft_client_id;
         this.isConfigured = true;
         this.initializeMSAL();
-        console.log('Microsoft integration configured from database');
+        console.log('✅ Microsoft integration configured from database');
+      } else {
+        console.log('❌ No client ID found in database');
       }
     } catch (error) {
-      console.warn('Failed to load Microsoft configuration from database:', error);
+      console.warn('❌ Database lookup failed:', error);
     }
   }
 
@@ -117,12 +133,24 @@ class MicrosoftAuthService {
     return this.isConfigured;
   }
 
-  // Get configuration status with helpful message
-  getConfigurationStatus(): {
+  // Get configuration status with helpful message (async to check database)
+  async getConfigurationStatus(): Promise<{
     configured: boolean;
     message: string;
     instructions?: string;
-  } {
+  }> {
+    console.log('🔍 getConfigurationStatus() called, current isConfigured:', this.isConfigured);
+    
+    // If not configured via environment variable, try database
+    if (!this.isConfigured) {
+      console.log('🔍 Not configured, attempting database initialization...');
+      try {
+        await this.initializeFromDatabase();
+      } catch (error) {
+        console.warn('Failed to check database configuration:', error);
+      }
+    }
+
     if (this.isConfigured) {
       return {
         configured: true,

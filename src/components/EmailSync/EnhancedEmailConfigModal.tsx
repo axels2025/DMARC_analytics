@@ -72,6 +72,10 @@ export function EnhancedEmailConfigModal({
   const [loading, setLoading] = useState(true);
   const [testingConnections, setTestingConnections] = useState<Set<string>>(new Set());
   const [selectedConfig, setSelectedConfig] = useState<string | null>(null);
+  const [providerStatuses, setProviderStatuses] = useState<Record<EmailProvider, { configured: boolean; message: string; instructions?: string } | null>>({
+    [EmailProvider.GMAIL]: null,
+    [EmailProvider.MICROSOFT]: null
+  });
 
   const loadConfigs = useCallback(async () => {
     if (!user) return;
@@ -93,11 +97,41 @@ export function EnhancedEmailConfigModal({
     }
   }, [user]);
 
+  const loadProviderStatuses = useCallback(async () => {
+    try {
+      const statuses: Record<EmailProvider, { configured: boolean; message: string; instructions?: string } | null> = {
+        [EmailProvider.GMAIL]: null,
+        [EmailProvider.MICROSOFT]: null
+      };
+
+      // Check each provider's configuration status
+      for (const provider of Object.values(EmailProvider)) {
+        try {
+          const isConfigured = unifiedEmailService.isProviderConfigured(provider);
+          const status = await unifiedEmailService.getProviderConfigurationStatus(provider);
+          statuses[provider] = { ...status, configured: isConfigured };
+        } catch (error) {
+          console.error(`Error checking ${provider} status:`, error);
+          statuses[provider] = {
+            configured: false,
+            message: `Failed to check ${provider} configuration`,
+            instructions: 'Please check your environment configuration'
+          };
+        }
+      }
+
+      setProviderStatuses(statuses);
+    } catch (error) {
+      console.error('Error loading provider statuses:', error);
+    }
+  }, []);
+
   useEffect(() => {
     if (isOpen && user) {
       loadConfigs();
+      loadProviderStatuses();
     }
-  }, [isOpen, user, loadConfigs]);
+  }, [isOpen, user, loadConfigs, loadProviderStatuses]);
 
   const handleConfigAdded = (newConfig: EmailConfig) => {
     setConfigs(prev => [newConfig, ...prev.filter(c => c.id !== newConfig.id)]);
@@ -262,8 +296,8 @@ export function EnhancedEmailConfigModal({
                   <h4 className="font-semibold text-amber-900 mb-2">Configuration Status:</h4>
                   <div className="space-y-2">
                     {Object.values(EmailProvider).map(provider => {
-                      const isConfigured = unifiedEmailService.isProviderConfigured(provider);
-                      const status = unifiedEmailService.getProviderConfigurationStatus(provider);
+                      const providerStatus = providerStatuses[provider];
+                      const isConfigured = providerStatus?.configured ?? false;
                       const providerName = provider === EmailProvider.GMAIL ? 'Gmail' : 'Microsoft Outlook';
                       
                       return (
@@ -271,7 +305,7 @@ export function EnhancedEmailConfigModal({
                           <div className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-green-500' : 'bg-red-500'}`} />
                           <span className="font-medium">{providerName}:</span>
                           <span className={isConfigured ? 'text-green-700' : 'text-red-700'}>
-                            {status.message}
+                            {providerStatus?.message || 'Loading...'}
                           </span>
                         </div>
                       );

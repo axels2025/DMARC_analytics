@@ -263,7 +263,7 @@ const EmailProviderSelection: React.FC<EmailProviderSelectionProps> = ({
       for (const provider of Object.values(EmailProvider)) {
         try {
           const isConfigured = unifiedEmailService.isProviderConfigured(provider);
-          const status = unifiedEmailService.getProviderConfigurationStatus(provider);
+          const status = await unifiedEmailService.getProviderConfigurationStatus(provider);
           statuses[provider] = { ...status, configured: isConfigured };
         } catch (error) {
           console.error(`Error checking ${provider} status:`, error);
